@@ -1,0 +1,8 @@
+$latex = 'platex %O %S';
+$bibtex = 'pbibtex %O %B';
+$dvipdf = 'dvipdfmx %O -o %D %S';
+$makeindex = 'mendex -U %O -o %D %S';
+
+$pdf_mode = 3;
+
+$ENV{'TZ'} = 'Asia/Tokyo';

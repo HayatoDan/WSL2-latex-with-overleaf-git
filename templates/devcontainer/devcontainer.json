@@ -1,0 +1,53 @@
+{
+  "name": "LaTeX (TeX Live Full)",
+
+  "image": "texlive/texlive:latest",
+
+  "remoteUser": "texlive",
+  "updateRemoteUserUID": true,
+
+  "features": {
+    "ghcr.io/devcontainers/features/git:1": {}
+  },
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "James-Yu.latex-workshop",
+        "OpenAI.chatgpt"
+      ],
+
+      "settings": {
+        "latex-workshop.latex.outDir": "build",
+        "latex-workshop.latex.autoBuild.run": "onSave",
+        "latex-workshop.latex.rootFile.doNotPrompt": true,
+        "latex-workshop.view.pdf.viewer": "tab",
+
+        "latex-workshop.latex.recipe.default": "first",
+
+        "latex-workshop.latex.recipes": [
+          {
+            "name": "latexmk (project config)",
+            "tools": [
+              "latexmk-project"
+            ]
+          }
+        ],
+
+        "latex-workshop.latex.tools": [
+          {
+            "name": "latexmk-project",
+            "command": "latexmk",
+            "args": [
+              "-synctex=1",
+              "-interaction=nonstopmode",
+              "-file-line-error",
+              "-outdir=build",
+              "%DOC%"
+            ]
+          }
+        ]
+      }
+    }
+  }
+}

@@ -1,0 +1,6 @@
+$lualatex = 'lualatex %O %S';
+$bibtex = 'bibtex %O %B';
+
+$pdf_mode = 4;
+
+$ENV{'TZ'} = 'Asia/Tokyo';
