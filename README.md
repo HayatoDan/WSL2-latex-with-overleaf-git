@@ -93,7 +93,8 @@ code .
 
 ```bash
 cd ~/docker_work
-git clone <repository-url> latex
+
+git clone git@github.com:HayatoDan/WSL2-latex-with-overleaf-git.git latex
 cd latex
 ```
 
@@ -599,7 +600,7 @@ cd ~/docker_work
 環境リポジトリを clone。
 
 ```bash
-git clone <repository-url> latex
+git clone git@github.com:HayatoDan/WSL2-latex-with-overleaf-git.git latex
 cd latex
 ```
 
