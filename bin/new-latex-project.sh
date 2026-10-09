@@ -2,439 +2,685 @@
 
 set -euo pipefail
 
-# ============================================================
-# Configuration
-# ============================================================
-
-BASE_DIR="$HOME/docker_work/latex"
-PROJECTS_DIR="$BASE_DIR/projects"
-TEMPLATES_DIR="$BASE_DIR/templates"
-
-DEVCONTAINER_TEMPLATE="$TEMPLATES_DIR/devcontainer"
-GITIGNORE_TEMPLATE="$TEMPLATES_DIR/gitignore/latex.gitignore"
-LATEXMKRC_DIR="$TEMPLATES_DIR/latexmkrc"
-
 
 # ============================================================
-# Utility functions
+# LaTeX development environment setup for WSL
+#
+# Assumptions:
+#
+#   - WSL2 / Ubuntu are already installed
+#   - Docker Engine is already installed in Ubuntu
+#   - Git is already installed
+#   - This repository is cloned under ~/docker_work/
+#
+# This script configures only the settings required by the
+# LaTeX development environment.
+#
+# Safe to run multiple times.
 # ============================================================
 
-die() {
-    echo
-    echo "ERROR: $*" >&2
-    exit 1
-}
+
+# ------------------------------------------------------------
+# Paths
+# ------------------------------------------------------------
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
+
+BIN_DIR="$REPO_ROOT/bin"
+PROJECTS_DIR="$REPO_ROOT/projects"
+
+USER_BIN="$HOME/bin"
+BASHRC="$HOME/.bashrc"
+
+GH_CLI_BASE="https:"'//cli.github.com/packages'
+
+
+# ------------------------------------------------------------
+# Output helpers
+# ------------------------------------------------------------
 
 info() {
-    echo
-    echo "==> $*"
+    printf '\n\033[1;34m==>\033[0m %s\n' "$1"
 }
 
-ask_yes_no() {
-    local prompt="$1"
-    local default="${2:-y}"
-    local answer
+ok() {
+    printf '    \033[1;32mOK\033[0m   %s\n' "$1"
+}
 
-    if [[ "$default" == "y" ]]; then
-        read -r -p "$prompt [Y/n]: " answer
-        answer="${answer:-y}"
-    else
-        read -r -p "$prompt [y/N]: " answer
-        answer="${answer:-n}"
+warn() {
+    printf '    \033[1;33mWARN\033[0m %s\n' "$1"
+}
+
+error() {
+    printf '    \033[1;31mERROR\033[0m %s\n' "$1" >&2
+}
+
+
+# ------------------------------------------------------------
+# Repository structure
+# ------------------------------------------------------------
+
+info "Checking LaTeX environment repository"
+
+REQUIRED_FILES=(
+    "bin/latex-menu.sh"
+    "bin/latex-select.sh"
+    "bin/new-latex-project.sh"
+    "templates/devcontainer/devcontainer.json"
+    "templates/gitignore/latex.gitignore"
+    "templates/latexmkrc/pdflatex"
+    "templates/latexmkrc/lualatex"
+    "templates/latexmkrc/platex"
+    "templates/latexmkrc/uplatex"
+)
+
+for file in "${REQUIRED_FILES[@]}"; do
+
+    if [[ ! -f "$REPO_ROOT/$file" ]]; then
+
+        error "Missing required file:"
+        echo "      $REPO_ROOT/$file"
+        exit 1
+
     fi
 
-    [[ "$answer" =~ ^[Yy]$ ]]
-}
-
-
-# ============================================================
-# Dependency checks
-# ============================================================
-
-for cmd in git docker sed grep cp; do
-    command -v "$cmd" >/dev/null 2>&1 \
-        || die "'$cmd' が見つかりません。"
 done
 
-[[ -d "$DEVCONTAINER_TEMPLATE" ]] \
-    || die "Dev Container template がありません: $DEVCONTAINER_TEMPLATE"
+ok "Repository structure looks good"
+echo "      $REPO_ROOT"
 
-[[ -f "$DEVCONTAINER_TEMPLATE/devcontainer.json" ]] \
-    || die "devcontainer.json がありません: $DEVCONTAINER_TEMPLATE/devcontainer.json"
 
-[[ -f "$GITIGNORE_TEMPLATE" ]] \
-    || die ".gitignore template がありません: $GITIGNORE_TEMPLATE"
+# ------------------------------------------------------------
+# Required base commands
+# ------------------------------------------------------------
 
-for engine in pdflatex lualatex uplatex platex; do
-    [[ -f "$LATEXMKRC_DIR/$engine" ]] \
-        || die "latexmkrc template がありません: $LATEXMKRC_DIR/$engine"
+info "Checking prerequisites"
+
+for command in git docker; do
+
+    if command -v "$command" >/dev/null 2>&1; then
+
+        ok "$command"
+
+    else
+
+        error "'$command' is not installed."
+        echo
+        echo "This installer assumes that Docker and Git"
+        echo "are already installed in WSL."
+        exit 1
+
+    fi
+
 done
+
+
+# ------------------------------------------------------------
+# fzf
+# ------------------------------------------------------------
+
+info "Checking fzf"
+
+if command -v fzf >/dev/null 2>&1; then
+
+    ok "fzf"
+
+else
+
+    warn "fzf is not installed."
+    echo
+    echo "texmenu / texproj / texnew require fzf."
+    echo
+
+    read -r -p \
+        "Install fzf using apt? [Y/n]: " \
+        ANSWER
+
+    ANSWER="${ANSWER:-Y}"
+
+    if [[ "$ANSWER" =~ ^[Yy]$ ]]; then
+
+        sudo apt-get update
+        sudo apt-get install -y fzf
+
+        ok "fzf installed"
+
+    else
+
+        warn "fzf installation skipped."
+        echo "      The LaTeX launcher will not work without fzf."
+
+    fi
+
+fi
+
+
+# ------------------------------------------------------------
+# GitHub CLI installation
+# ------------------------------------------------------------
+
+info "Checking GitHub CLI"
+
+if command -v gh >/dev/null 2>&1; then
+
+    GH_VERSION="$(gh --version | head -n 1)"
+    ok "$GH_VERSION"
+
+else
+
+    warn "GitHub CLI (gh) is not installed."
+    echo
+    echo "Private GitHub repositories are expected to be common"
+    echo "in this environment."
+    echo
+
+    read -r -p \
+        "Install GitHub CLI from the official repository? [Y/n]: " \
+        ANSWER
+
+    ANSWER="${ANSWER:-Y}"
+
+    if [[ "$ANSWER" =~ ^[Yy]$ ]]; then
+
+        info "Installing GitHub CLI"
+
+        if ! command -v wget >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y wget ca-certificates
+        fi
+
+        sudo mkdir -p -m 755 /etc/apt/keyrings
+
+        TEMP_KEY="$(mktemp)"
+
+        wget \
+            -nv \
+            -O "$TEMP_KEY" \
+            "$GH_CLI_BASE/githubcli-archive-keyring.gpg"
+
+        sudo install \
+            -m 0644 \
+            "$TEMP_KEY" \
+            /etc/apt/keyrings/githubcli-archive-keyring.gpg
+
+        rm -f "$TEMP_KEY"
+
+        sudo mkdir -p -m 755 /etc/apt/sources.list.d
+
+        echo \
+            "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] $GH_CLI_BASE stable main" \
+            | sudo tee \
+                /etc/apt/sources.list.d/github-cli.list \
+                >/dev/null
+
+        sudo apt-get update
+        sudo apt-get install -y gh
+
+        ok "GitHub CLI installed"
+
+    else
+
+        warn "GitHub CLI installation skipped."
+
+    fi
+
+fi
+
+
+# ------------------------------------------------------------
+# GitHub authentication
+# ------------------------------------------------------------
+
+if command -v gh >/dev/null 2>&1; then
+
+    info "Checking GitHub authentication"
+
+    if gh auth status \
+        --hostname github.com \
+        >/dev/null 2>&1; then
+
+        ok "Authenticated with GitHub"
+
+        if gh auth setup-git \
+            --hostname github.com \
+            >/dev/null 2>&1; then
+
+            ok "GitHub CLI configured as Git credential helper"
+
+        else
+
+            warn "Could not configure GitHub credential helper."
+
+        fi
+
+    else
+
+        warn "GitHub authentication is not configured."
+        echo
+
+        read -r -p \
+            "Authenticate with GitHub now? [Y/n]: " \
+            ANSWER
+
+        ANSWER="${ANSWER:-Y}"
+
+        if [[ "$ANSWER" =~ ^[Yy]$ ]]; then
+
+            echo
+            echo "A browser-based GitHub login will start."
+            echo
+
+            if gh auth login \
+                --hostname github.com \
+                --git-protocol https \
+                --web; then
+
+                ok "GitHub authentication completed"
+
+                if gh auth setup-git \
+                    --hostname github.com; then
+
+                    ok "GitHub CLI configured as Git credential helper"
+
+                else
+
+                    warn "Could not configure Git credential helper."
+
+                fi
+
+            else
+
+                warn "GitHub authentication failed."
+                echo "      You can retry later with:"
+                echo
+                echo "        gh auth login"
+
+            fi
+
+        else
+
+            warn "GitHub authentication skipped."
+
+        fi
+
+    fi
+
+fi
+
+
+# ------------------------------------------------------------
+# Project directory
+# ------------------------------------------------------------
+
+info "Preparing projects directory"
 
 mkdir -p "$PROJECTS_DIR"
 
-
-# ============================================================
-# Header
-# ============================================================
-
-echo
-echo "=========================================="
-echo " New LaTeX Project Setup"
-echo "=========================================="
-echo
-echo "Projects directory:"
-echo "  $PROJECTS_DIR"
-echo
+ok "$PROJECTS_DIR"
 
 
-# ============================================================
-# Project source
-# ============================================================
+# ------------------------------------------------------------
+# Executable permissions
+# ------------------------------------------------------------
 
-echo "プロジェクトの作成方法を選択してください。"
-echo
-echo "  1) Overleaf Git から clone"
-echo "  2) 新しいローカルプロジェクトを作成"
-echo
+info "Preparing scripts"
 
-while true; do
-    read -r -p "選択 [1/2]: " source_type
+chmod +x "$BIN_DIR/latex-menu.sh"
+chmod +x "$BIN_DIR/latex-select.sh"
+chmod +x "$BIN_DIR/new-latex-project.sh"
 
-    case "$source_type" in
-        1|2)
-            break
-            ;;
-        *)
-            echo "1 または 2 を入力してください。"
-            ;;
+ok "latex-menu.sh"
+ok "latex-select.sh"
+ok "new-latex-project.sh"
+
+
+# ------------------------------------------------------------
+# ~/bin
+# ------------------------------------------------------------
+
+info "Preparing user commands"
+
+mkdir -p "$USER_BIN"
+
+
+create_symlink() {
+
+    local source="$1"
+    local target="$2"
+    local name="$3"
+
+    local current_target
+    local source_target
+    local answer
+
+    if [[ -L "$target" ]]; then
+
+        current_target="$(readlink -f "$target" || true)"
+        source_target="$(readlink -f "$source")"
+
+        if [[ "$current_target" == "$source_target" ]]; then
+
+            ok "$name already configured"
+            return
+
+        fi
+
+        warn "$target already points somewhere else:"
+        echo "      -> $(readlink "$target")"
+        echo
+
+        read -r -p "Replace it? [y/N]: " answer
+
+        if [[ "$answer" =~ ^[Yy]$ ]]; then
+
+            rm "$target"
+            ln -s "$source" "$target"
+
+            ok "$name updated"
+
+        else
+
+            warn "$name was not changed"
+
+        fi
+
+        return
+
+    fi
+
+
+    if [[ -e "$target" ]]; then
+
+        warn "$target already exists and is not a symbolic link."
+        echo "      It will not be overwritten automatically."
+        return
+
+    fi
+
+
+    ln -s "$source" "$target"
+
+    ok "$name -> $source"
+}
+
+
+create_symlink \
+    "$BIN_DIR/latex-menu.sh" \
+    "$USER_BIN/texmenu" \
+    "texmenu"
+
+create_symlink \
+    "$BIN_DIR/latex-select.sh" \
+    "$USER_BIN/texproj" \
+    "texproj"
+
+create_symlink \
+    "$BIN_DIR/new-latex-project.sh" \
+    "$USER_BIN/texnew" \
+    "texnew"
+
+
+# ------------------------------------------------------------
+# PATH configuration
+# ------------------------------------------------------------
+
+info "Checking ~/.bashrc"
+
+touch "$BASHRC"
+
+BEGIN_MARKER="# >>> latex-dev environment >>>"
+
+if grep -Fq "$BEGIN_MARKER" "$BASHRC"; then
+
+    ok "~/bin PATH configuration already exists"
+
+else
+
+    cat >> "$BASHRC" <<'EOF'
+
+# >>> latex-dev environment >>>
+# Commands installed by the LaTeX development environment
+if [ -d "$HOME/bin" ]; then
+    case ":$PATH:" in
+        *":$HOME/bin:"*) ;;
+        *) export PATH="$HOME/bin:$PATH" ;;
     esac
-done
+fi
+# <<< latex-dev environment <<<
+EOF
 
+    ok "Added ~/bin to PATH"
 
-# ============================================================
-# Project name
-# ============================================================
-
-echo
-read -r -p "ローカルのプロジェクト名: " PROJECT_NAME
-
-[[ -n "$PROJECT_NAME" ]] \
-    || die "プロジェクト名が空です。"
-
-if [[ "$PROJECT_NAME" == */* ]]; then
-    die "プロジェクト名には '/' を使用しないでください。"
 fi
 
-PROJECT_DIR="$PROJECTS_DIR/$PROJECT_NAME"
 
-[[ ! -e "$PROJECT_DIR" ]] \
-    || die "既に存在します: $PROJECT_DIR"
+# Make commands available immediately.
+case ":$PATH:" in
+    *":$HOME/bin:"*) ;;
+    *) export PATH="$HOME/bin:$PATH" ;;
+esac
 
 
-# ============================================================
-# Clone / initialize
-# ============================================================
+# ------------------------------------------------------------
+# Git identity
+# ------------------------------------------------------------
 
-if [[ "$source_type" == "1" ]]; then
+info "Checking Git identity"
 
-    echo
-    read -r -p "Overleaf Git URL: " OVERLEAF_URL
+GIT_NAME="$(
+    git config --global --get user.name \
+        || true
+)"
 
-    [[ -n "$OVERLEAF_URL" ]] \
-        || die "Overleaf Git URL が空です。"
+GIT_EMAIL="$(
+    git config --global --get user.email \
+        || true
+)"
 
-    info "Overleafからcloneします"
 
-    git clone "$OVERLEAF_URL" "$PROJECT_DIR"
+if [[ -n "$GIT_NAME" ]]; then
+
+    ok "user.name  = $GIT_NAME"
 
 else
 
-    info "新しいローカルGit repositoryを作成します"
+    warn "Git user.name is not configured."
 
-    mkdir -p "$PROJECT_DIR"
+    read -r -p \
+        "Git user.name (leave empty to skip): " \
+        VALUE
 
-    git -C "$PROJECT_DIR" init -b master
+    if [[ -n "$VALUE" ]]; then
+
+        git config \
+            --global \
+            user.name \
+            "$VALUE"
+
+        ok "user.name configured"
+
+    fi
+
 fi
 
-cd "$PROJECT_DIR"
+
+if [[ -n "$GIT_EMAIL" ]]; then
+
+    ok "user.email = $GIT_EMAIL"
+
+else
+
+    warn "Git user.email is not configured."
+
+    read -r -p \
+        "Git user.email (leave empty to skip): " \
+        VALUE
+
+    if [[ -n "$VALUE" ]]; then
+
+        git config \
+            --global \
+            user.email \
+            "$VALUE"
+
+        ok "user.email configured"
+
+    fi
+
+fi
 
 
-# ============================================================
-# Dev Container
-# ============================================================
+# ------------------------------------------------------------
+# Docker access
+# ------------------------------------------------------------
 
-info "Dev Container設定を追加します"
+info "Checking Docker access"
 
-if [[ -e "$PROJECT_DIR/.devcontainer" ]]; then
+if docker info >/dev/null 2>&1; then
 
-    echo
-    echo "既存の .devcontainer/ を検出しました。"
+    ok "Docker can be used without sudo"
 
-    if ask_yes_no "テンプレートの .devcontainer/ で置き換えますか？" "n"; then
-        rm -rf "$PROJECT_DIR/.devcontainer"
-        cp -R "$DEVCONTAINER_TEMPLATE" "$PROJECT_DIR/.devcontainer"
+else
+
+    if sudo docker info >/dev/null 2>&1; then
+
+        warn "Docker currently requires sudo."
+        echo
+
+        read -r -p \
+            "Add '$USER' to the docker group? [Y/n]: " \
+            ANSWER
+
+        ANSWER="${ANSWER:-Y}"
+
+        if [[ "$ANSWER" =~ ^[Yy]$ ]]; then
+
+            if ! getent group docker >/dev/null 2>&1; then
+                sudo groupadd docker
+            fi
+
+            sudo usermod \
+                -aG docker \
+                "$USER"
+
+            ok "Added '$USER' to docker group"
+
+            echo
+            echo "      Restart WSL before using Docker without sudo."
+
+        fi
+
     else
-        echo "既存の .devcontainer/ をそのまま使用します。"
-    fi
 
-else
-
-    cp -R "$DEVCONTAINER_TEMPLATE" "$PROJECT_DIR/.devcontainer"
-
-fi
-
-
-# ============================================================
-# .gitignore
-# ============================================================
-
-info ".gitignoreを設定します"
-
-if [[ ! -f "$PROJECT_DIR/.gitignore" ]]; then
-
-    cp "$GITIGNORE_TEMPLATE" "$PROJECT_DIR/.gitignore"
-
-else
-
-    echo "既存の .gitignore を検出しました。"
-    echo "LaTeX用テンプレートの内容を追加します。"
-
-    echo >> "$PROJECT_DIR/.gitignore"
-    echo "# --- Local LaTeX environment ---" >> "$PROJECT_DIR/.gitignore"
-
-    while IFS= read -r line || [[ -n "$line" ]]; do
-
-        # Empty lines are harmless but do not need duplicate insertion.
-        if [[ -z "$line" ]]; then
-            continue
-        fi
-
-        if ! grep -Fxq "$line" "$PROJECT_DIR/.gitignore"; then
-            echo "$line" >> "$PROJECT_DIR/.gitignore"
-        fi
-
-    done < "$GITIGNORE_TEMPLATE"
-
-fi
-
-
-# ============================================================
-# latexmkrc
-# ============================================================
-
-echo
-
-HAS_LATEXMKRC=false
-
-if [[ -f "$PROJECT_DIR/latexmkrc" ]]; then
-    HAS_LATEXMKRC=true
-fi
-
-if [[ -f "$PROJECT_DIR/.latexmkrc" ]]; then
-    HAS_LATEXMKRC=true
-fi
-
-if [[ "$HAS_LATEXMKRC" == true ]]; then
-
-    echo "既存の latexmkrc を検出しました。"
-
-    if [[ -f "$PROJECT_DIR/latexmkrc" ]]; then
-        echo "  - latexmkrc"
-    fi
-
-    if [[ -f "$PROJECT_DIR/.latexmkrc" ]]; then
-        echo "  - .latexmkrc"
-    fi
-
-    if [[ -f "$PROJECT_DIR/latexmkrc" \
-       && -f "$PROJECT_DIR/.latexmkrc" ]]; then
+        error "Docker daemon is not reachable."
 
         echo
-        echo "WARNING:"
-        echo "  latexmkrc と .latexmkrc の両方が存在します。"
-        echo "  設定競合の可能性があるため確認してください。"
-
-    fi
-
-    echo
-    echo "既存のlatexmk設定は変更しません。"
-
-else
-
-    echo "latexmkrc がないため、LaTeXエンジンを選択してください。"
-    echo
-    echo "  1) pdfLaTeX"
-    echo "  2) LuaLaTeX"
-    echo "  3) upLaTeX"
-    echo "  4) pLaTeX"
-    echo
-
-    while true; do
-
-        read -r -p "選択 [1-4]: " engine_choice
-
-        case "$engine_choice" in
-            1)
-                ENGINE="pdflatex"
-                break
-                ;;
-            2)
-                ENGINE="lualatex"
-                break
-                ;;
-            3)
-                ENGINE="uplatex"
-                break
-                ;;
-            4)
-                ENGINE="platex"
-                break
-                ;;
-            *)
-                echo "1〜4を入力してください。"
-                ;;
-        esac
-
-    done
-
-    cp "$LATEXMKRC_DIR/$ENGINE" "$PROJECT_DIR/latexmkrc"
-
-    echo
-    echo "latexmkrcを作成しました:"
-    echo "  $ENGINE"
-
-fi
-
-
-# ============================================================
-# TeX Live Docker image pinning
-# ============================================================
-
-echo
-
-DEVCONTAINER_JSON="$PROJECT_DIR/.devcontainer/devcontainer.json"
-
-if [[ ! -f "$DEVCONTAINER_JSON" ]]; then
-    die "devcontainer.json がありません: $DEVCONTAINER_JSON"
-fi
-
-if ask_yes_no "TeX Live Docker imageを現在のdigestに固定しますか？" "y"; then
-
-    info "texlive/texlive:latest を取得します"
-
-    docker pull texlive/texlive:latest
-
-    IMAGE_REF=$(
-        docker image inspect texlive/texlive:latest \
-            --format '{{index .RepoDigests 0}}'
-    )
-
-    [[ -n "$IMAGE_REF" ]] \
-        || die "Docker image digestを取得できませんでした。"
-
-    echo
-    echo "固定するDocker image:"
-    echo "  $IMAGE_REF"
-
-    # Replace:
-    #   texlive/texlive:latest
-    #   texlive/texlive:<tag>
-    #   texlive/texlive@sha256:<digest>
-    #
-    # with the currently pulled digest.
-
-    sed -i -E \
-        "s#\"image\"[[:space:]]*:[[:space:]]*\"texlive/texlive(:[^\"]+|@sha256:[^\"]+)\"#\"image\": \"$IMAGE_REF\"#" \
-        "$DEVCONTAINER_JSON"
-
-    if ! grep -Fq "$IMAGE_REF" "$DEVCONTAINER_JSON"; then
-
+        echo "Docker is installed, but the daemon does not appear"
+        echo "to be running."
         echo
-        echo "現在の devcontainer.json:"
-        grep '"image"' "$DEVCONTAINER_JSON" || true
-
-        die "devcontainer.json のDocker image書き換えに失敗しました。"
+        echo "Check with:"
+        echo
+        echo "  sudo systemctl status docker"
+        echo
 
     fi
 
-else
-
-    echo
-    echo "Docker imageはテンプレートの設定をそのまま使用します。"
-
 fi
 
 
-# ============================================================
-# Summary
-# ============================================================
+# ------------------------------------------------------------
+# VS Code
+# ------------------------------------------------------------
 
-echo
-echo "=========================================="
-echo " Setup completed"
-echo "=========================================="
-echo
-
-echo "Project:"
-echo "  $PROJECT_DIR"
-echo
-
-echo "Dev Container:"
-echo "  $PROJECT_DIR/.devcontainer/devcontainer.json"
-echo "  (Git管理対象)"
-echo
-
-echo "Docker image:"
-grep '"image"' "$DEVCONTAINER_JSON" \
-    | sed 's/^[[:space:]]*/  /'
-echo
-
-if [[ -f "$PROJECT_DIR/latexmkrc" ]]; then
-
-    echo "latexmkrc:"
-    echo "  $PROJECT_DIR/latexmkrc"
-    echo
-
-elif [[ -f "$PROJECT_DIR/.latexmkrc" ]]; then
-
-    echo "latexmkrc:"
-    echo "  $PROJECT_DIR/.latexmkrc"
-    echo
-
-fi
-
-echo "Git status:"
-git status --short --branch || true
-
-echo
-echo "次の操作:"
-echo
-echo "  1. VS Codeでプロジェクトを開く"
-echo "  2. Dev Containers: Reopen in Container"
-echo "  3. LaTeX Workshop または"
-echo "     latexmk -outdir=build <main.tex>"
-echo "     でコンパイル"
-echo "  4. 動作確認後、必要なファイルをcommit/push"
-echo
-
-
-# ============================================================
-# Open VS Code
-# ============================================================
+info "Checking VS Code integration"
 
 if command -v code >/dev/null 2>&1; then
 
-    if ask_yes_no "VS Codeでこのプロジェクトを開きますか？" "y"; then
-
-        info "VS Codeを起動します"
-
-        code "$PROJECT_DIR"
-
-    fi
+    ok "'code' command is available"
 
 else
 
-    echo "VS Codeの 'code' コマンドが見つからないため、"
-    echo "自動起動をスキップします。"
+    warn "'code' command is not available in WSL."
+
+    echo
+    echo "      texproj / texnew use:"
+    echo
+    echo "        code <project>"
+    echo
+    echo "      VS Code installation is outside the scope"
+    echo "      of this installer."
 
 fi
+
+
+# ------------------------------------------------------------
+# Parent repository .gitignore
+# ------------------------------------------------------------
+
+info "Checking projects/ Git exclusion"
+
+if [[ -f "$REPO_ROOT/.gitignore" ]] \
+    && grep -Eq \
+        '^/projects/?$' \
+        "$REPO_ROOT/.gitignore"; then
+
+    ok "projects/ is excluded from this repository"
+
+else
+
+    warn "Parent .gitignore does not contain:"
+    echo
+    echo "        /projects/"
+    echo
+    echo "      Add this rule so project repositories are not"
+    echo "      tracked by the environment repository."
+
+fi
+
+
+# ------------------------------------------------------------
+# Final command checks
+# ------------------------------------------------------------
+
+info "Checking LaTeX environment commands"
+
+for command in texmenu texproj texnew; do
+
+    if command -v "$command" >/dev/null 2>&1; then
+        ok "$command"
+    else
+        warn "$command is not currently available"
+    fi
+
+done
+
+
+# ------------------------------------------------------------
+# Summary
+# ------------------------------------------------------------
+
+echo
+echo "============================================================"
+echo " LaTeX environment setup complete"
+echo "============================================================"
+echo
+echo "Environment repository:"
+echo "  $REPO_ROOT"
+echo
+echo "Projects:"
+echo "  $PROJECTS_DIR"
+echo
+echo "Commands:"
+echo "  texmenu    LaTeX project launcher"
+echo "  texproj    Select and open an existing project"
+echo "  texnew     Create or clone a new project"
+echo
+echo "Reload the shell configuration with:"
+echo
+echo "  source ~/.bashrc"
+echo
+echo "Then:"
+echo
+echo "  texmenu"
+echo

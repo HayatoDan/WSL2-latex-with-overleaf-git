@@ -1,18 +1,25 @@
 # LaTeX Development Environment
 
-WSL2 + Docker + VS Code + Overleaf Git を用いた LaTeX 執筆環境。
+WSL2 + Docker + VS Code + Git を用いた LaTeX 執筆環境。
 
 各 LaTeX プロジェクトを Docker Dev Container 内で開くことで、ホスト側の TeX 環境に依存せず、再現可能な LaTeX 環境を構築する。
 
-主な用途：
+GitHub 等の通常の Git repository、および Overleaf Git の双方に対応する。
 
-- pdfLaTeX
-- LuaLaTeX
-- pLaTeX
-- upLaTeX
-- Overleaf Git との同期
-- VS Code + LaTeX Workshop
-- Codex を利用した編集・コンパイル支援
+## 基本方針
+
+各 LaTeX プロジェクトでは、原則として **canonical Git remote を1つだけ持つ**。
+
+- Overleaf を中心に共同執筆する場合：Overleaf Git を `origin` とする
+- GitHub を中心に管理する場合：GitHub を `origin` とする
+- GitHub と Overleaf の双方を利用する場合：GitHub を `origin` とし、Overleaf 側の GitHub Sync を利用する
+- ローカルのみの場合：remote なし
+
+ローカル repository から GitHub と Overleaf の双方へ直接 push する二重同期は、通常は行わない。
+
+これにより「どこが最新版か」を分かりやすく保つ。
+
+GitHub repository は private repository を主に想定し、GitHub CLI (`gh`) を利用して HTTPS 認証を行う。
 
 ---
 
@@ -23,6 +30,7 @@ Windows
 └── WSL2
     └── Ubuntu
         ├── Git
+        ├── GitHub CLI
         ├── Docker Engine
         │
         └── ~/docker_work/
@@ -73,89 +81,148 @@ docker info
 
 ### Windows / VS Code 側
 
-VS Code を利用する場合は、以下を準備しておく。
+VS Code を利用する場合は以下を準備しておく。
 
 - Visual Studio Code
 - WSL extension
 - Dev Containers extension
 
-WSL ターミナルから以下が動作すること。
+WSL ターミナルから、
 
 ```bash
 code .
 ```
 
+が動作すること。
+
+VS Code および WSL 自体のインストールは、この repository のセットアップスクリプトでは行わない。
+
 ---
 
 ## 3. インストール
 
-### 3.1 リポジトリを clone
+### 3.1 Environment repository を clone
 
 ```bash
 cd ~/docker_work
-
-git clone git@github.com:HayatoDan/WSL2-latex-with-overleaf-git.git latex
+git clone <repository-url> latex
 cd latex
 ```
 
-この環境では、リポジトリを
+この環境では repository を、
 
 ```text
 ~/docker_work/latex
 ```
 
-に配置することを想定している。
+付近に配置することを想定している。
 
----
-
-### 3.2 セットアップスクリプトを実行
+### 3.2 セットアップ
 
 ```bash
 ./setup/install-wsl.sh
 ```
 
-セットアップスクリプトでは主に以下を行う。
+実行権限が失われている場合は、
 
-- 必要なディレクトリの確認・作成
+```bash
+chmod +x setup/install-wsl.sh
+./setup/install-wsl.sh
+```
+
+または、
+
+```bash
+bash setup/install-wsl.sh
+```
+
+で実行できる。
+
+セットアップでは主に以下を行う。
+
 - `projects/` の作成
-- `fzf` の確認
-- `bin/*.sh` の実行権限確認
+- `fzf` の確認・必要に応じた導入
+- GitHub CLI (`gh`) の確認・必要に応じた導入
+- GitHub へのブラウザ認証
+- `gh` の Git credential helper 設定
+- 各スクリプトへの実行権限設定
+- `~/bin/texmenu` の作成
 - `~/bin/texproj` の作成
 - `~/bin/texnew` の作成
 - `~/bin` の PATH 設定
-- Git の `user.name` / `user.email` の確認
-- Docker が sudo なしで利用可能か確認
+- Git identity の確認
+- Docker の利用可否確認
 - VS Code の `code` コマンド確認
 
 必要な項目については対話的に設定する。
 
 セットアップスクリプトは複数回実行しても問題ないように設計している。
 
-実行後、
+実行後：
 
 ```bash
 source ~/.bashrc
 ```
 
-を実行する。
-
 確認：
 
 ```bash
+which texmenu
 which texproj
 which texnew
 ```
 
-通常は以下のようになる。
+---
+
+## 4. GitHub 認証
+
+GitHub repository は private repository を主に想定する。
+
+セットアップ時に GitHub CLI が存在しなければ、導入するか確認される。
+
+その後、
 
 ```text
-/home/<user>/bin/texproj
-/home/<user>/bin/texnew
+GitHub CLI
+    ↓
+browser authentication
+    ↓
+HTTPS Git
+    ↓
+GitHub CLI credential helper
 ```
+
+という構成を作る。
+
+認証状態は、
+
+```bash
+gh auth status
+```
+
+で確認できる。
+
+認証をやり直す場合：
+
+```bash
+gh auth login
+```
+
+Git credential helper を再設定する場合：
+
+```bash
+gh auth setup-git
+```
+
+この環境では GitHub の Git protocol として HTTPS を標準とする。
+
+新しく GitHub repository を clone するときに SSH形式のURLを入力した場合、GitHub CLI認証が利用可能であれば HTTPS URL に変換して clone する。
+
+既存 repository が SSH remote を利用している場合は、自動的には変更しない。
 
 ---
 
-## 4. ディレクトリ構成
+## 5. ディレクトリ構成
 
 ```text
 latex/
@@ -163,6 +230,7 @@ latex/
 ├── README.md
 │
 ├── bin/
+│   ├── latex-menu.sh
 │   ├── latex-select.sh
 │   └── new-latex-project.sh
 │
@@ -172,10 +240,8 @@ latex/
 ├── templates/
 │   ├── devcontainer/
 │   │   └── devcontainer.json
-│   │
 │   ├── gitignore/
 │   │   └── latex.gitignore
-│   │
 │   └── latexmkrc/
 │       ├── pdflatex
 │       ├── lualatex
@@ -190,33 +256,31 @@ latex/
 
 ---
 
-## 5. Git 管理方針
+## 6. Git 管理方針
 
-このリポジトリは **LaTeX 開発環境そのもの**を管理する。
+この repository は **LaTeX 開発環境そのもの**を管理する。
 
-各論文・プロジェクトは `projects/` 以下に配置するが、この環境リポジトリでは管理しない。
+`projects/` 以下に置く各論文・プロジェクトは、この repository では管理しない。
 
-親リポジトリの `.gitignore` には以下を指定する。
+親 repository の `.gitignore`：
 
 ```gitignore
 /projects/
 ```
 
-したがって、
+例えば、
 
 ```text
 ~/docker_work/latex/.git
 ```
 
-と
+と、
 
 ```text
 ~/docker_work/latex/projects/paper-a/.git
 ```
 
-は独立した Git リポジトリとなる。
-
-各 LaTeX プロジェクトは、それぞれ Overleaf Git 等で個別に管理する。
+は独立した Git repository となる。
 
 確認：
 
@@ -226,115 +290,167 @@ git check-ignore -v projects/
 
 ---
 
-## 6. 既存プロジェクトを開く
+## 7. Launcher
 
-以下を実行する。
+通常の入口は、
 
 ```bash
-texproj
+texmenu
 ```
 
-`fzf` が起動し、`projects/` 以下のプロジェクトを検索・選択できる。
+である。
+
+実行すると、
 
 ```text
-texproj
-   ↓
-fzf でプロジェクト選択
-   ↓
-git pull --rebase
-   ↓
-VS Code 起動
+New project
+Open existing project
 ```
 
-ローカルに未コミット変更がある場合は、自動で `git pull` せず確認を求める。
-
-VS Code が開いたら、
+から選択できる。
 
 ```text
-Ctrl + Shift + P
+texmenu
+   │
+   ├── New project
+   │       ↓
+   │     texnew
+   │
+   └── Open existing project
+           ↓
+         texproj
 ```
 
-から
-
-```text
-Dev Containers: Reopen in Container
-```
-
-を実行する。
-
-Dev Container が起動したら、そのまま編集を開始できる。
+`texnew` と `texproj` を直接実行することもできる。
 
 ---
 
-## 7. 新しい LaTeX プロジェクトを作成する
-
-以下を実行する。
+## 8. 新しいプロジェクト
 
 ```bash
 texnew
 ```
 
-実体は、
+を実行すると、
 
 ```text
-bin/new-latex-project.sh
+Clone from Overleaf
+Clone from Git repository
+Create local project
 ```
 
-である。
+から選択する。
 
-以下の2種類のプロジェクト作成に対応する。
+### 8.1 Clone from Overleaf
 
-### 7.1 Overleaf プロジェクトを clone
+Overleaf の Git URL を入力する。
 
-Overleaf の Git URL を入力し、
+この場合、
 
 ```text
-projects/<project-name>/
+origin = Overleaf
 ```
 
-へ clone する。
-
-Overleaf Git の URL は通常、
+となり、Overleaf を canonical remote とする。
 
 ```text
-https://git.overleaf.com/...
+Local
+  ↕
+Overleaf
 ```
 
-の形式となる。
+Overleaf Git の認証には Overleaf の Git authentication token を使用する。
 
-認証時：
+### 8.2 Clone from Git repository
+
+GitHub、GitLab、その他の Git URL を指定する。
+
+GitHub repository が検出された場合は GitHub CLI の認証状態を確認する。
+
+未認証の場合は、その場でブラウザ認証を開始できる。
+
+GitHub を利用する場合：
 
 ```text
-Username: git
-Password: Overleaf Git authentication token
+origin = GitHub
 ```
 
-を使用する。
+GitHub と Overleaf の双方を利用したい場合は、ローカル repository に Overleaf remote を追加するのではなく、Overleaf 側の GitHub Sync を利用する。
+
+```text
+        GitHub
+       ↗      ↖
+   Local     Overleaf
+```
+
+これにより GitHub を唯一の canonical Git remote とする。
+
+### 8.3 Create local project
+
+新しい Git repository をローカルに作成する。
+
+```text
+origin = none
+```
+
+必要になった時点で任意の Git remote を追加する。
 
 ---
 
-### 7.2 新規ローカルプロジェクト
+## 9. 既存プロジェクト
 
-新しいディレクトリを作成し、Git リポジトリを初期化する。
-
-既存の `latexmkrc` がない場合は、使用するコンパイラを選択する。
-
-- pdfLaTeX
-- LuaLaTeX
-- upLaTeX
-- pLaTeX
-
-対応するテンプレートが
-
-```text
-templates/latexmkrc/
+```bash
+texproj
 ```
 
-からコピーされる。
+を実行する。
+
+`fzf` で `projects/` 以下のプロジェクトを検索・選択する。
+
+```text
+texproj
+   ↓
+project 選択
+   ↓
+git pull --rebase
+   ↓
+VS Code
+```
+
+`texproj` は通常、remote の種類を意識しない。
+
+例えば、
+
+```text
+origin = Overleaf
+```
+
+なら Overleaf から pull し、
+
+```text
+origin = GitHub
+```
+
+なら GitHub から pull する。
+
+GitHub HTTPS repository の場合は、pull 前に GitHub CLI の認証状態を確認する。
+
+remote が存在しない場合は pull をスキップする。
+
+ローカルに未コミット変更がある場合も、自動 pull は行わない。
+
+VS Code が開いたら、
+
+```text
+Ctrl + Shift + P
+→ Dev Containers: Reopen in Container
+```
+
+を実行する。
 
 ---
 
-## 8. Dev Container
+## 10. Dev Container
 
 テンプレート：
 
@@ -348,70 +464,58 @@ templates/devcontainer/devcontainer.json
 texlive/texlive:latest
 ```
 
-新規プロジェクト作成時には最新版のイメージを pull した後、実際に取得された Docker image digest をプロジェクトの `devcontainer.json` に保存する。
+新規プロジェクト作成時には必要に応じて、
 
-例：
-
-```json
-"image": "texlive/texlive@sha256:..."
+```text
+texlive/texlive@sha256:...
 ```
 
-これにより、プロジェクトごとに使用した TeX Live 環境を再現可能にする。
+の形で Docker image digest を固定する。
 
-一方、テンプレート側は
+各プロジェクトの `.devcontainer/` は Git 管理する。
 
-```json
-"image": "texlive/texlive:latest"
-```
+これにより、別PCでも同じ TeX Live image を利用できる。
 
-のままとする。
+既存 repository に `.devcontainer/` がある場合は、原則として既存設定を保持する。
 
 ---
 
-## 9. `.devcontainer/` の Git 管理
+## 11. latexmkrc
 
-各 LaTeX プロジェクトの
+コンパイラ設定は各プロジェクトの `latexmkrc` を source of truth とする。
 
-```text
-.devcontainer/
-```
-
-は Git 管理する。
-
-したがって Overleaf 側にも、
+既存 repository に、
 
 ```text
-.devcontainer/devcontainer.json
+latexmkrc
 ```
 
-が保存される。
+または、
 
-これにより、別PCへ clone した場合でも同じ Docker image digest を利用できる。
-
----
-
-## 10. `latexmkrc`
-
-コンパイラの選択は各プロジェクトの `latexmkrc` を source of truth とする。
-
-既存の Overleaf プロジェクトに `latexmkrc` が存在する場合は、それを変更しない。
-
-例えば upLaTeX：
-
-```perl
-$latex = 'uplatex %O %S';
-$bibtex = 'upbibtex %O %B';
-$dvipdf = 'dvipdfmx %O -o %D %S';
-$makeindex = 'mendex -U %O -o %D %S';
-
-$pdf_mode = 3;
-
-$ENV{'TZ'} = 'Asia/Tokyo';
+```text
+.latexmkrc
 ```
 
-ローカルコンパイル時の出力先 `build/` は `latexmkrc` には書かない。
+が存在する場合は、その設定を保持する。
 
-Dev Container / LaTeX Workshop 側から、
+存在しない場合は、
+
+- pdfLaTeX
+- LuaLaTeX
+- upLaTeX
+- pLaTeX
+
+から選択し、
+
+```text
+templates/latexmkrc/
+```
+
+のテンプレートをコピーする。
+
+ローカル出力先 `build/` は `latexmkrc` には設定しない。
+
+LaTeX Workshop 側から、
 
 ```text
 latexmk -outdir=build ...
@@ -419,23 +523,11 @@ latexmk -outdir=build ...
 
 として指定する。
 
-この設計により、
-
-```text
-Overleaf:
-    latexmkrc をそのまま利用
-
-Local:
-    latexmkrc
-    +
-    -outdir=build
-```
-
-という役割分担になる。
+これにより Overleaf 等で利用する `latexmkrc` と、ローカル固有の出力ディレクトリ設定を分離する。
 
 ---
 
-## 11. LaTeX Workshop
+## 12. LaTeX Workshop
 
 Dev Container では LaTeX Workshop を使用する。
 
@@ -445,13 +537,13 @@ Dev Container では LaTeX Workshop を使用する。
 - PDF を VS Code タブ内で表示
 - 出力先は `build/`
 - `latexmk` を利用
-- コンパイラの詳細は各プロジェクトの `latexmkrc` に委ねる
+- コンパイラは各プロジェクトの `latexmkrc` に委ねる
 
 通常は `.tex` ファイルを保存するだけでコンパイルされる。
 
 ---
 
-## 12. Codex
+## 13. Codex
 
 Dev Container 内でも Codex / ChatGPT extension を利用できる。
 
@@ -465,109 +557,50 @@ Codex から、
 
 を実行できる。
 
-Dev Container 内では例えば以下の環境となる。
+TeX Live や Git は Dev Container 内のものを利用する。
 
-```text
-/workspaces/<project>
-```
-
-TeX Live や Git はコンテナ内のものを利用する。
+Codex の OAuth ログインに失敗する場合、Tailscale や VPN が原因となる場合があるため、認証時のみ一時的に無効化して確認する。
 
 ---
 
-## 13. 日常の基本ワークフロー
+## 14. Windows launcher
 
-通常は以下だけでよい。
-
-```bash
-texproj
-```
-
-その後：
-
-```text
-1. fzf でプロジェクトを検索
-2. Enter
-3. git pull --rebase
-4. VS Code が開く
-5. Dev Containers: Reopen in Container
-6. 編集
-7. 保存すると LaTeX Workshop がコンパイル
-8. Git commit
-9. git pull --rebase
-10. git push
-```
-
----
-
-## 14. Git / Overleaf の基本フロー
-
-編集前：
-
-```bash
-git pull --rebase
-```
-
-編集後：
-
-```bash
-git status
-git add .
-git commit -m "..."
-```
-
-push の直前にもう一度、
-
-```bash
-git pull --rebase
-git push
-```
-
-としておくと、Overleaf 側で編集された内容との衝突を減らせる。
-
----
-
-## 15. Windows から `texproj` を起動する
-
-Windows のショートカットから直接 `texproj` を起動することもできる。
+Windows のショートカットから直接 launcher を起動できる。
 
 ショートカットのリンク先：
 
 ```text
-C:\Windows\System32\wsl.exe -d Ubuntu-22.04 -- bash -ic "texproj; exec bash"
+C:\Windows\System32\wsl.exe -d Ubuntu-22.04 -- bash -ic "texmenu; exec bash"
 ```
 
-Ubuntu のディストリビューション名が異なる場合は、
+Ubuntu の distribution 名は、
 
 ```powershell
 wsl -l -v
 ```
 
-で確認して変更する。
+で確認できる。
 
-このショートカットを実行すると、
+実行すると、
 
 ```text
 Windows shortcut
-    ↓
+      ↓
 WSL Ubuntu
-    ↓
-texproj
-    ↓
-fzf
-    ↓
-VS Code
+      ↓
+   texmenu
+      ↓
+┌───────────────────────┐
+│ New project           │
+│ Open existing project │
+└───────────────────────┘
 ```
 
 となる。
 
-最後の
+`exec bash` により launcher 実行後も WSL terminal を残す。
 
-```text
-exec bash
-```
-
-により、VS Code 起動後も WSL ターミナルを閉じず、
+VS Code が開いた後、
 
 ```text
 Ctrl + Shift + P
@@ -578,9 +611,61 @@ Ctrl + Shift + P
 
 ---
 
-## 16. 新しいPC / WSL環境への復元
+## 15. 日常ワークフロー
 
-新しい環境では、まず以下を準備する。
+### 既存プロジェクト
+
+```text
+Windows LaTeX icon
+        ↓
+Open existing project
+        ↓
+fzf
+        ↓
+GitHubの場合は認証確認
+        ↓
+git pull --rebase
+        ↓
+VS Code
+        ↓
+Reopen in Container
+        ↓
+編集
+        ↓
+git commit
+        ↓
+git pull --rebase
+        ↓
+git push
+```
+
+### 新規プロジェクト
+
+```text
+Windows LaTeX icon
+        ↓
+New project
+        ↓
+┌──────────────────────────┐
+│ Overleaf                 │
+│ Git repository           │
+│ Local repository         │
+└──────────────────────────┘
+        ↓
+必要ならGitHub認証
+        ↓
+clone / git init
+        ↓
+Dev Container設定
+        ↓
+VS Code
+```
+
+---
+
+## 16. 新しいPC / WSLへの復元
+
+あらかじめ以下を用意する。
 
 ```text
 WSL2
@@ -590,17 +675,17 @@ Docker Engine
 VS Code
 ```
 
-WSL 内に作業ディレクトリを用意する。
+WSL 内で：
 
 ```bash
 mkdir -p ~/docker_work
 cd ~/docker_work
 ```
 
-環境リポジトリを clone。
+environment repository を clone：
 
 ```bash
-git clone git@github.com:HayatoDan/WSL2-latex-with-overleaf-git.git latex
+git clone <repository-url> latex
 cd latex
 ```
 
@@ -611,44 +696,52 @@ cd latex
 source ~/.bashrc
 ```
 
-確認：
+このとき必要に応じて、
 
-```bash
+```text
+fzf
+GitHub CLI
+GitHub authentication
+Git credential helper
+texmenu
 texproj
 texnew
 ```
 
-必要な LaTeX プロジェクトは、Overleaf Git 等から `projects/` 以下へ clone する。
+まで設定される。
+
+確認：
 
 ```bash
-texnew
+texmenu
 ```
 
-を使用してもよい。
+必要な LaTeX project は `texnew` から再度 clone する。
 
 ---
 
 ## 17. セットアップ状態の確認
 
-### launcher
+### Commands
 
 ```bash
+which texmenu
+which texproj
+which texnew
+```
+
+### Symlinks
+
+```bash
+readlink -f ~/bin/texmenu
 readlink -f ~/bin/texproj
 readlink -f ~/bin/texnew
 ```
 
-想定：
-
-```text
-~/docker_work/latex/bin/latex-select.sh
-~/docker_work/latex/bin/new-latex-project.sh
-```
-
-### PATH
+### GitHub
 
 ```bash
-which texproj
-which texnew
+gh auth status
 ```
 
 ### Docker
@@ -657,7 +750,7 @@ which texnew
 docker info
 ```
 
-### Git
+### Git identity
 
 ```bash
 git config --global user.name
@@ -681,9 +774,7 @@ git check-ignore -v projects/
 
 ## 18. Troubleshooting
 
-### `texproj: command not found`
-
-まず：
+### `texmenu`, `texproj`, `texnew`: command not found
 
 ```bash
 source ~/.bashrc
@@ -692,42 +783,35 @@ source ~/.bashrc
 確認：
 
 ```bash
-echo "$PATH"
+which texmenu
 which texproj
+which texnew
 ```
 
-symlink：
+### GitHub private repository を clone できない
+
+まず：
 
 ```bash
-ls -l ~/bin/texproj
+gh auth status
 ```
 
----
+未認証なら：
+
+```bash
+gh auth login
+gh auth setup-git
+```
 
 ### `fzf: command not found`
 
-```bash
-sudo apt update
-sudo apt install fzf
-```
-
-その後：
+setup を再実行する。
 
 ```bash
-fzf --version
+./setup/install-wsl.sh
 ```
 
----
-
-### Docker が sudo なしで使用できない
-
-確認：
-
-```bash
-docker info
-```
-
-permission error が出る場合：
+### Docker が sudo なしで利用できない
 
 ```bash
 sudo usermod -aG docker "$USER"
@@ -735,44 +819,24 @@ sudo usermod -aG docker "$USER"
 
 その後 WSL を再起動する。
 
----
-
 ### VS Code が起動しない
-
-確認：
 
 ```bash
 which code
 code .
 ```
 
-WSL から Windows 側の VS Code を起動できる状態にする。
-
----
+を確認する。
 
 ### `Reopen in Container` が表示されない
 
 Windows 側の VS Code に Dev Containers extension がインストールされていることを確認する。
 
-Extension ID：
-
-```text
-ms-vscode-remote.remote-containers
-```
-
 ---
 
-### Codex のログインに失敗する
+## 19. 管理対象
 
-Tailscale 等のネットワーク/VPN環境によって OAuth 認証が失敗する場合がある。
-
-認証時に問題が発生した場合は、一時的に Tailscale / VPN を無効化した状態でも確認する。
-
----
-
-## 19. このリポジトリで管理するもの
-
-管理対象：
+Environment repository で管理するもの：
 
 ```text
 README.md
@@ -782,37 +846,53 @@ setup/
 templates/
 ```
 
-管理対象外：
+管理しないもの：
 
 ```text
 projects/
 ```
 
-各プロジェクトは、それぞれ独立した Git リポジトリとして管理する。
+各 project は独立した Git repository とする。
 
 ---
 
 ## 20. Design Policy
 
-この環境では、以下の役割分担を採用する。
+### Environment repository
 
-### ホスト / WSL
+管理：
 
-- プロジェクト管理
+- launcher
+- project creation scripts
+- setup scripts
+- Dev Container template
+- latexmkrc templates
+- `.gitignore` template
+
+### WSL host
+
+担当：
+
 - Git
+- GitHub CLI
 - Docker Engine
+- project storage
 - launcher
 - VS Code 起動
 
 ### Dev Container
 
+担当：
+
 - TeX Live
 - latexmk
 - LaTeX Workshop
 - Codex
-- 実際の LaTeX コンパイル
+- LaTeX compilation
 
 ### Project repository
+
+管理：
 
 - `.tex`
 - bibliography
@@ -821,19 +901,31 @@ projects/
 - `.devcontainer/`
 - project-specific configuration
 
-### Environment repository
+### Canonical remote
 
-- 共通テンプレート
-- launcher
-- project creation script
-- bootstrap/setup script
+原則として各 project は1つの canonical Git remote を持つ。
 
-この分離により、
+```text
+Overleaf-centric
+
+Local ←→ Overleaf
+```
+
+```text
+GitHub-centric
+
+Local ←→ GitHub ←→ Overleaf
+```
+
+GitHub-centric な project では Overleaf との同期は Overleaf 側の GitHub Sync に任せ、ローカルから GitHub と Overleaf の2箇所へ直接同期する運用は避ける。
+
+これにより、
 
 - PC交換
 - WSL再構築
 - TeX Live更新
+- private GitHub repository の認証
 - Overleafとの同期
 - プロジェクトごとの再現性
 
-を可能な限り独立して扱えるようにする。
+をできるだけ独立して扱えるようにする。
