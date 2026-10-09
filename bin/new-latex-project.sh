@@ -5,18 +5,6 @@ set -euo pipefail
 
 # ============================================================
 # LaTeX development environment setup for WSL
-#
-# Assumptions:
-#
-#   - WSL2 / Ubuntu are already installed
-#   - Docker Engine is already installed in Ubuntu
-#   - Git is already installed
-#   - This repository is cloned under ~/docker_work/
-#
-# This script configures only the settings required by the
-# LaTeX development environment.
-#
-# Safe to run multiple times.
 # ============================================================
 
 
@@ -24,11 +12,12 @@ set -euo pipefail
 # Paths
 # ------------------------------------------------------------
 
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
+SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]}")"
+SCRIPT_DIR="$(cd -- "$(dirname -- "$SCRIPT_PATH")" && pwd)"
+LATEX_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 
-BIN_DIR="$REPO_ROOT/bin"
-PROJECTS_DIR="$REPO_ROOT/projects"
+BIN_DIR="$LATEX_ROOT/bin"
+PROJECTS_DIR="$LATEX_ROOT/projects"
 
 USER_BIN="$HOME/bin"
 BASHRC="$HOME/.bashrc"
@@ -77,10 +66,10 @@ REQUIRED_FILES=(
 
 for file in "${REQUIRED_FILES[@]}"; do
 
-    if [[ ! -f "$REPO_ROOT/$file" ]]; then
+    if [[ ! -f "$LATEX_ROOT/$file" ]]; then
 
         error "Missing required file:"
-        echo "      $REPO_ROOT/$file"
+        echo "      $LATEX_ROOT/$file"
         exit 1
 
     fi
@@ -88,7 +77,7 @@ for file in "${REQUIRED_FILES[@]}"; do
 done
 
 ok "Repository structure looks good"
-echo "      $REPO_ROOT"
+echo "      $LATEX_ROOT"
 
 
 # ------------------------------------------------------------
@@ -620,10 +609,10 @@ fi
 
 info "Checking projects/ Git exclusion"
 
-if [[ -f "$REPO_ROOT/.gitignore" ]] \
+if [[ -f "$LATEX_ROOT/.gitignore" ]] \
     && grep -Eq \
         '^/projects/?$' \
-        "$REPO_ROOT/.gitignore"; then
+        "$LATEX_ROOT/.gitignore"; then
 
     ok "projects/ is excluded from this repository"
 
@@ -666,7 +655,7 @@ echo " LaTeX environment setup complete"
 echo "============================================================"
 echo
 echo "Environment repository:"
-echo "  $REPO_ROOT"
+echo "  $LATEX_ROOT"
 echo
 echo "Projects:"
 echo "  $PROJECTS_DIR"
