@@ -2,19 +2,19 @@
 
 set -euo pipefail
 
+
 # ============================================================
-# LaTeX environment setup for WSL
+# LaTeX development environment setup for WSL
 #
 # Assumptions:
+#
 #   - WSL2 / Ubuntu are already installed
 #   - Docker Engine is already installed in Ubuntu
 #   - Git is already installed
-#   - This repository has been cloned under:
+#   - This repository is cloned under ~/docker_work/
 #
-#       ~/docker_work/latex
-#
-# This script configures only the user-side settings required
-# by this LaTeX environment.
+# This script configures only the settings required by the
+# LaTeX development environment.
 #
 # Safe to run multiple times.
 # ============================================================
@@ -32,6 +32,8 @@ PROJECTS_DIR="$REPO_ROOT/projects"
 
 USER_BIN="$HOME/bin"
 BASHRC="$HOME/.bashrc"
+
+GH_CLI_BASE="https:"'//cli.github.com/packages'
 
 
 # ------------------------------------------------------------
@@ -62,6 +64,7 @@ error() {
 info "Checking LaTeX environment repository"
 
 REQUIRED_FILES=(
+    "bin/latex-menu.sh"
     "bin/latex-select.sh"
     "bin/new-latex-project.sh"
     "templates/devcontainer/devcontainer.json"
@@ -73,11 +76,15 @@ REQUIRED_FILES=(
 )
 
 for file in "${REQUIRED_FILES[@]}"; do
+
     if [[ ! -f "$REPO_ROOT/$file" ]]; then
+
         error "Missing required file:"
         echo "      $REPO_ROOT/$file"
         exit 1
+
     fi
+
 done
 
 ok "Repository structure looks good"
@@ -91,21 +98,29 @@ echo "      $REPO_ROOT"
 info "Checking prerequisites"
 
 for command in git docker; do
+
     if command -v "$command" >/dev/null 2>&1; then
+
         ok "$command"
+
     else
+
         error "'$command' is not installed."
         echo
-        echo "This setup script assumes that Docker and Git"
+        echo "This installer assumes that Docker and Git"
         echo "are already installed in WSL."
         exit 1
+
     fi
+
 done
 
 
 # ------------------------------------------------------------
 # fzf
 # ------------------------------------------------------------
+
+info "Checking fzf"
 
 if command -v fzf >/dev/null 2>&1; then
 
@@ -115,10 +130,13 @@ else
 
     warn "fzf is not installed."
     echo
-    echo "texproj requires fzf for project selection."
+    echo "texmenu / texproj / texnew require fzf."
     echo
 
-    read -r -p "Install fzf using apt? [Y/n]: " ANSWER
+    read -r -p \
+        "Install fzf using apt? [Y/n]: " \
+        ANSWER
+
     ANSWER="${ANSWER:-Y}"
 
     if [[ "$ANSWER" =~ ^[Yy]$ ]]; then
@@ -131,7 +149,160 @@ else
     else
 
         warn "fzf installation skipped."
-        echo "      texproj will not work until fzf is installed."
+        echo "      The LaTeX launcher will not work without fzf."
+
+    fi
+
+fi
+
+
+# ------------------------------------------------------------
+# GitHub CLI installation
+# ------------------------------------------------------------
+
+info "Checking GitHub CLI"
+
+if command -v gh >/dev/null 2>&1; then
+
+    GH_VERSION="$(gh --version | head -n 1)"
+    ok "$GH_VERSION"
+
+else
+
+    warn "GitHub CLI (gh) is not installed."
+    echo
+    echo "Private GitHub repositories are expected to be common"
+    echo "in this environment."
+    echo
+
+    read -r -p \
+        "Install GitHub CLI from the official repository? [Y/n]: " \
+        ANSWER
+
+    ANSWER="${ANSWER:-Y}"
+
+    if [[ "$ANSWER" =~ ^[Yy]$ ]]; then
+
+        info "Installing GitHub CLI"
+
+        if ! command -v wget >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y wget ca-certificates
+        fi
+
+        sudo mkdir -p -m 755 /etc/apt/keyrings
+
+        TEMP_KEY="$(mktemp)"
+
+        wget \
+            -nv \
+            -O "$TEMP_KEY" \
+            "$GH_CLI_BASE/githubcli-archive-keyring.gpg"
+
+        sudo install \
+            -m 0644 \
+            "$TEMP_KEY" \
+            /etc/apt/keyrings/githubcli-archive-keyring.gpg
+
+        rm -f "$TEMP_KEY"
+
+        sudo mkdir -p -m 755 /etc/apt/sources.list.d
+
+        echo \
+            "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] $GH_CLI_BASE stable main" \
+            | sudo tee \
+                /etc/apt/sources.list.d/github-cli.list \
+                >/dev/null
+
+        sudo apt-get update
+        sudo apt-get install -y gh
+
+        ok "GitHub CLI installed"
+
+    else
+
+        warn "GitHub CLI installation skipped."
+
+    fi
+
+fi
+
+
+# ------------------------------------------------------------
+# GitHub authentication
+# ------------------------------------------------------------
+
+if command -v gh >/dev/null 2>&1; then
+
+    info "Checking GitHub authentication"
+
+    if gh auth status \
+        --hostname github.com \
+        >/dev/null 2>&1; then
+
+        ok "Authenticated with GitHub"
+
+        if gh auth setup-git \
+            --hostname github.com \
+            >/dev/null 2>&1; then
+
+            ok "GitHub CLI configured as Git credential helper"
+
+        else
+
+            warn "Could not configure GitHub credential helper."
+
+        fi
+
+    else
+
+        warn "GitHub authentication is not configured."
+        echo
+
+        read -r -p \
+            "Authenticate with GitHub now? [Y/n]: " \
+            ANSWER
+
+        ANSWER="${ANSWER:-Y}"
+
+        if [[ "$ANSWER" =~ ^[Yy]$ ]]; then
+
+            echo
+            echo "A browser-based GitHub login will start."
+            echo
+
+            if gh auth login \
+                --hostname github.com \
+                --git-protocol https \
+                --web; then
+
+                ok "GitHub authentication completed"
+
+                if gh auth setup-git \
+                    --hostname github.com; then
+
+                    ok "GitHub CLI configured as Git credential helper"
+
+                else
+
+                    warn "Could not configure Git credential helper."
+
+                fi
+
+            else
+
+                warn "GitHub authentication failed."
+                echo "      You can retry later with:"
+                echo
+                echo "        gh auth login"
+
+            fi
+
+        else
+
+            warn "GitHub authentication skipped."
+
+        fi
 
     fi
 
@@ -155,9 +326,11 @@ ok "$PROJECTS_DIR"
 
 info "Preparing scripts"
 
+chmod +x "$BIN_DIR/latex-menu.sh"
 chmod +x "$BIN_DIR/latex-select.sh"
 chmod +x "$BIN_DIR/new-latex-project.sh"
 
+ok "latex-menu.sh"
 ok "latex-select.sh"
 ok "new-latex-project.sh"
 
@@ -177,31 +350,43 @@ create_symlink() {
     local target="$2"
     local name="$3"
 
+    local current_target
+    local source_target
+    local answer
+
     if [[ -L "$target" ]]; then
 
-        CURRENT_TARGET="$(readlink -f "$target" || true)"
-        SOURCE_TARGET="$(readlink -f "$source")"
+        current_target="$(readlink -f "$target" || true)"
+        source_target="$(readlink -f "$source")"
 
-        if [[ "$CURRENT_TARGET" == "$SOURCE_TARGET" ]]; then
+        if [[ "$current_target" == "$source_target" ]]; then
+
             ok "$name already configured"
             return
+
         fi
 
         warn "$target already points somewhere else:"
         echo "      -> $(readlink "$target")"
         echo
 
-        read -r -p "Replace it? [y/N]: " ANSWER
+        read -r -p "Replace it? [y/N]: " answer
 
-        if [[ "$ANSWER" =~ ^[Yy]$ ]]; then
+        if [[ "$answer" =~ ^[Yy]$ ]]; then
+
             rm "$target"
             ln -s "$source" "$target"
+
             ok "$name updated"
+
         else
+
             warn "$name was not changed"
+
         fi
 
         return
+
     fi
 
 
@@ -215,9 +400,15 @@ create_symlink() {
 
 
     ln -s "$source" "$target"
+
     ok "$name -> $source"
 }
 
+
+create_symlink \
+    "$BIN_DIR/latex-menu.sh" \
+    "$USER_BIN/texmenu" \
+    "texmenu"
 
 create_symlink \
     "$BIN_DIR/latex-select.sh" \
@@ -239,7 +430,6 @@ info "Checking ~/.bashrc"
 touch "$BASHRC"
 
 BEGIN_MARKER="# >>> latex-dev environment >>>"
-END_MARKER="# <<< latex-dev environment <<<"
 
 if grep -Fq "$BEGIN_MARKER" "$BASHRC"; then
 
@@ -250,7 +440,7 @@ else
     cat >> "$BASHRC" <<'EOF'
 
 # >>> latex-dev environment >>>
-# Commands installed by ~/docker_work/latex/setup/install-wsl.sh
+# Commands installed by the LaTeX development environment
 if [ -d "$HOME/bin" ]; then
     case ":$PATH:" in
         *":$HOME/bin:"*) ;;
@@ -264,7 +454,8 @@ EOF
 
 fi
 
-# Make it available immediately during this script.
+
+# Make commands available immediately.
 case ":$PATH:" in
     *":$HOME/bin:"*) ;;
     *) export PATH="$HOME/bin:$PATH" ;;
@@ -277,8 +468,15 @@ esac
 
 info "Checking Git identity"
 
-GIT_NAME="$(git config --global --get user.name || true)"
-GIT_EMAIL="$(git config --global --get user.email || true)"
+GIT_NAME="$(
+    git config --global --get user.name \
+        || true
+)"
+
+GIT_EMAIL="$(
+    git config --global --get user.email \
+        || true
+)"
 
 
 if [[ -n "$GIT_NAME" ]]; then
@@ -289,11 +487,19 @@ else
 
     warn "Git user.name is not configured."
 
-    read -r -p "Git user.name (leave empty to skip): " VALUE
+    read -r -p \
+        "Git user.name (leave empty to skip): " \
+        VALUE
 
     if [[ -n "$VALUE" ]]; then
-        git config --global user.name "$VALUE"
+
+        git config \
+            --global \
+            user.name \
+            "$VALUE"
+
         ok "user.name configured"
+
     fi
 
 fi
@@ -307,11 +513,19 @@ else
 
     warn "Git user.email is not configured."
 
-    read -r -p "Git user.email (leave empty to skip): " VALUE
+    read -r -p \
+        "Git user.email (leave empty to skip): " \
+        VALUE
 
     if [[ -n "$VALUE" ]]; then
-        git config --global user.email "$VALUE"
+
+        git config \
+            --global \
+            user.email \
+            "$VALUE"
+
         ok "user.email configured"
+
     fi
 
 fi
@@ -346,9 +560,12 @@ else
                 sudo groupadd docker
             fi
 
-            sudo usermod -aG docker "$USER"
+            sudo usermod \
+                -aG docker \
+                "$USER"
 
             ok "Added '$USER' to docker group"
+
             echo
             echo "      Restart WSL before using Docker without sudo."
 
@@ -357,6 +574,7 @@ else
     else
 
         error "Docker daemon is not reachable."
+
         echo
         echo "Docker is installed, but the daemon does not appear"
         echo "to be running."
@@ -384,57 +602,58 @@ if command -v code >/dev/null 2>&1; then
 else
 
     warn "'code' command is not available in WSL."
+
     echo
-    echo "      texproj uses:"
+    echo "      texproj / texnew use:"
     echo
     echo "        code <project>"
     echo
-    echo "      Make sure VS Code can be launched from WSL."
+    echo "      VS Code installation is outside the scope"
+    echo "      of this installer."
 
 fi
 
 
-
 # ------------------------------------------------------------
-# Parent repo .gitignore
+# Parent repository .gitignore
 # ------------------------------------------------------------
 
 info "Checking projects/ Git exclusion"
 
 if [[ -f "$REPO_ROOT/.gitignore" ]] \
-    && grep -Eq '^/projects/?$' "$REPO_ROOT/.gitignore"; then
+    && grep -Eq \
+        '^/projects/?$' \
+        "$REPO_ROOT/.gitignore"; then
 
     ok "projects/ is excluded from this repository"
 
 else
 
-    warn "Parent .gitignore does not appear to contain:"
+    warn "Parent .gitignore does not contain:"
     echo
     echo "        /projects/"
     echo
-    echo "      Add it so individual LaTeX projects are not"
+    echo "      Add this rule so project repositories are not"
     echo "      tracked by the environment repository."
 
 fi
 
 
 # ------------------------------------------------------------
-# Final checks
+# Final command checks
 # ------------------------------------------------------------
 
-info "Checking commands"
+info "Checking LaTeX environment commands"
 
-if command -v texproj >/dev/null 2>&1; then
-    ok "texproj"
-else
-    warn "texproj is not currently available"
-fi
+for command in texmenu texproj texnew; do
 
-if command -v texnew >/dev/null 2>&1; then
-    ok "texnew"
-else
-    warn "texnew is not currently available"
-fi
+    if command -v "$command" >/dev/null 2>&1; then
+        ok "$command"
+    else
+        warn "$command is not currently available"
+    fi
+
+done
 
 
 # ------------------------------------------------------------
@@ -447,15 +666,13 @@ echo " LaTeX environment setup complete"
 echo "============================================================"
 echo
 echo "Environment repository:"
-echo
 echo "  $REPO_ROOT"
 echo
 echo "Projects:"
-echo
 echo "  $PROJECTS_DIR"
 echo
 echo "Commands:"
-echo
+echo "  texmenu    LaTeX project launcher"
 echo "  texproj    Select and open an existing project"
 echo "  texnew     Create or clone a new project"
 echo
@@ -465,5 +682,5 @@ echo "  source ~/.bashrc"
 echo
 echo "Then:"
 echo
-echo "  texproj"
+echo "  texmenu"
 echo
