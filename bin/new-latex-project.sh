@@ -2,184 +2,267 @@
 
 set -euo pipefail
 
-# ============================================================
-# Configuration
-# ============================================================
-
-BASE_DIR="$HOME/docker_work/latex"
-PROJECTS_DIR="$BASE_DIR/projects"
-TEMPLATES_DIR="$BASE_DIR/templates"
-
-DEVCONTAINER_TEMPLATE="$TEMPLATES_DIR/devcontainer"
-GITIGNORE_TEMPLATE="$TEMPLATES_DIR/gitignore/latex.gitignore"
-LATEXMKRC_DIR="$TEMPLATES_DIR/latexmkrc"
-
 
 # ============================================================
-# Utility functions
+# Paths
 # ============================================================
 
-die() {
-    echo
-    echo "ERROR: $*" >&2
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+LATEX_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
+
+PROJECTS_DIR="$LATEX_ROOT/projects"
+
+DEVCONTAINER_TEMPLATE="$LATEX_ROOT/templates/devcontainer"
+GITIGNORE_TEMPLATE="$LATEX_ROOT/templates/gitignore/latex.gitignore"
+LATEXMKRC_DIR="$LATEX_ROOT/templates/latexmkrc"
+
+
+# ============================================================
+# Helpers
+# ============================================================
+
+info() {
+    printf '\n\033[1;34m==>\033[0m %s\n' "$1"
+}
+
+ok() {
+    printf '    \033[1;32mOK\033[0m   %s\n' "$1"
+}
+
+warn() {
+    printf '    \033[1;33mWARN\033[0m %s\n' "$1"
+}
+
+error() {
+    printf '    \033[1;31mERROR\033[0m %s\n' "$1" >&2
+}
+
+
+# ============================================================
+# Dependencies
+# ============================================================
+
+for command in git docker sed grep cp fzf; do
+    if ! command -v "$command" >/dev/null 2>&1; then
+        error "'$command' is required."
+        exit 1
+    fi
+done
+
+
+# ============================================================
+# Template checks
+# ============================================================
+
+[[ -d "$DEVCONTAINER_TEMPLATE" ]] || {
+    error "Dev Container template not found:"
+    echo "      $DEVCONTAINER_TEMPLATE"
     exit 1
 }
 
-info() {
-    echo
-    echo "==> $*"
+[[ -f "$GITIGNORE_TEMPLATE" ]] || {
+    error ".gitignore template not found:"
+    echo "      $GITIGNORE_TEMPLATE"
+    exit 1
 }
 
-ask_yes_no() {
-    local prompt="$1"
-    local default="${2:-y}"
-    local answer
-
-    if [[ "$default" == "y" ]]; then
-        read -r -p "$prompt [Y/n]: " answer
-        answer="${answer:-y}"
-    else
-        read -r -p "$prompt [y/N]: " answer
-        answer="${answer:-n}"
-    fi
-
-    [[ "$answer" =~ ^[Yy]$ ]]
-}
-
-
-# ============================================================
-# Dependency checks
-# ============================================================
-
-for cmd in git docker sed grep cp; do
-    command -v "$cmd" >/dev/null 2>&1 \
-        || die "'$cmd' が見つかりません。"
-done
-
-[[ -d "$DEVCONTAINER_TEMPLATE" ]] \
-    || die "Dev Container template がありません: $DEVCONTAINER_TEMPLATE"
-
-[[ -f "$DEVCONTAINER_TEMPLATE/devcontainer.json" ]] \
-    || die "devcontainer.json がありません: $DEVCONTAINER_TEMPLATE/devcontainer.json"
-
-[[ -f "$GITIGNORE_TEMPLATE" ]] \
-    || die ".gitignore template がありません: $GITIGNORE_TEMPLATE"
-
-for engine in pdflatex lualatex uplatex platex; do
-    [[ -f "$LATEXMKRC_DIR/$engine" ]] \
-        || die "latexmkrc template がありません: $LATEXMKRC_DIR/$engine"
+for engine in pdflatex lualatex platex uplatex; do
+    [[ -f "$LATEXMKRC_DIR/$engine" ]] || {
+        error "latexmkrc template not found:"
+        echo "      $LATEXMKRC_DIR/$engine"
+        exit 1
+    }
 done
 
 mkdir -p "$PROJECTS_DIR"
 
 
 # ============================================================
-# Header
+# Select project source
 # ============================================================
 
-echo
-echo "=========================================="
-echo " New LaTeX Project Setup"
-echo "=========================================="
-echo
-echo "Projects directory:"
-echo "  $PROJECTS_DIR"
-echo
+SOURCE_TYPE="$(
+    printf '%s\n' \
+        "Clone from Overleaf" \
+        "Clone from Git repository" \
+        "Create local project" \
+    | fzf \
+        --prompt="New LaTeX project > " \
+        --height=45% \
+        --layout=reverse \
+        --border \
+        --info=hidden
+)"
 
-
-# ============================================================
-# Project source
-# ============================================================
-
-echo "プロジェクトの作成方法を選択してください。"
-echo
-echo "  1) Overleaf Git から clone"
-echo "  2) 新しいローカルプロジェクトを作成"
-echo
-
-while true; do
-    read -r -p "選択 [1/2]: " source_type
-
-    case "$source_type" in
-        1|2)
-            break
-            ;;
-        *)
-            echo "1 または 2 を入力してください。"
-            ;;
-    esac
-done
+if [[ -z "${SOURCE_TYPE:-}" ]]; then
+    echo "Cancelled."
+    exit 0
+fi
 
 
 # ============================================================
-# Project name
+# Helper: derive repository name
 # ============================================================
 
-echo
-read -r -p "ローカルのプロジェクト名: " PROJECT_NAME
+derive_repo_name() {
+    local url="$1"
+    local name
 
-[[ -n "$PROJECT_NAME" ]] \
-    || die "プロジェクト名が空です。"
+    name="${url%/}"
+    name="${name##*/}"
+    name="${name%.git}"
 
-if [[ "$PROJECT_NAME" == */* ]]; then
-    die "プロジェクト名には '/' を使用しないでください。"
+    # Handles SCP-like SSH URLs:
+    # git@github.com:user/repository.git
+    name="${name##*:}"
+
+    printf '%s' "$name"
+}
+
+
+# ============================================================
+# Create / clone project
+# ============================================================
+
+case "$SOURCE_TYPE" in
+
+    "Clone from Overleaf")
+
+        echo
+        read -r -p "Overleaf Git URL: " GIT_URL
+
+        if [[ -z "$GIT_URL" ]]; then
+            error "Git URL is required."
+            exit 1
+        fi
+
+        if [[ "$GIT_URL" != *"git.overleaf.com"* ]]; then
+            warn "This URL does not look like an Overleaf Git URL."
+            read -r -p "Continue anyway? [y/N]: " ANSWER
+
+            if [[ ! "$ANSWER" =~ ^[Yy]$ ]]; then
+                exit 0
+            fi
+        fi
+
+        DEFAULT_NAME="$(derive_repo_name "$GIT_URL")"
+
+        read -r -p "Local project name [$DEFAULT_NAME]: " PROJECT_NAME
+        PROJECT_NAME="${PROJECT_NAME:-$DEFAULT_NAME}"
+
+        ;;
+
+    "Clone from Git repository")
+
+        echo
+        read -r -p "Git repository URL: " GIT_URL
+
+        if [[ -z "$GIT_URL" ]]; then
+            error "Git URL is required."
+            exit 1
+        fi
+
+        DEFAULT_NAME="$(derive_repo_name "$GIT_URL")"
+
+        read -r -p "Local project name [$DEFAULT_NAME]: " PROJECT_NAME
+        PROJECT_NAME="${PROJECT_NAME:-$DEFAULT_NAME}"
+
+        ;;
+
+    "Create local project")
+
+        echo
+        read -r -p "Project name: " PROJECT_NAME
+
+        if [[ -z "$PROJECT_NAME" ]]; then
+            error "Project name is required."
+            exit 1
+        fi
+
+        ;;
+
+esac
+
+
+# ============================================================
+# Validate project name
+# ============================================================
+
+if [[ "$PROJECT_NAME" == */* || "$PROJECT_NAME" == "." || "$PROJECT_NAME" == ".." ]]; then
+    error "Invalid project name:"
+    echo "      $PROJECT_NAME"
+    exit 1
 fi
 
 PROJECT_DIR="$PROJECTS_DIR/$PROJECT_NAME"
 
-[[ ! -e "$PROJECT_DIR" ]] \
-    || die "既に存在します: $PROJECT_DIR"
+if [[ -e "$PROJECT_DIR" ]]; then
+    error "Project already exists:"
+    echo "      $PROJECT_DIR"
+    exit 1
+fi
 
 
 # ============================================================
 # Clone / initialize
 # ============================================================
 
-if [[ "$source_type" == "1" ]]; then
+info "Preparing project"
 
-    echo
-    read -r -p "Overleaf Git URL: " OVERLEAF_URL
+case "$SOURCE_TYPE" in
 
-    [[ -n "$OVERLEAF_URL" ]] \
-        || die "Overleaf Git URL が空です。"
+    "Clone from Overleaf"|"Clone from Git repository")
 
-    info "Overleafからcloneします"
+        git clone "$GIT_URL" "$PROJECT_DIR"
+        ok "Repository cloned"
 
-    git clone "$OVERLEAF_URL" "$PROJECT_DIR"
+        ;;
 
-else
+    "Create local project")
 
-    info "新しいローカルGit repositoryを作成します"
+        mkdir -p "$PROJECT_DIR"
 
-    mkdir -p "$PROJECT_DIR"
+        (
+            cd "$PROJECT_DIR"
+            git init
+        )
 
-    git -C "$PROJECT_DIR" init -b master
-fi
+        ok "Local Git repository created"
 
-cd "$PROJECT_DIR"
+        ;;
+
+esac
 
 
 # ============================================================
 # Dev Container
 # ============================================================
 
-info "Dev Container設定を追加します"
+info "Configuring Dev Container"
 
-if [[ -e "$PROJECT_DIR/.devcontainer" ]]; then
+DEVCONTAINER_CREATED=false
 
+if [[ -d "$PROJECT_DIR/.devcontainer" ]]; then
+
+    warn "Project already contains .devcontainer/"
     echo
-    echo "既存の .devcontainer/ を検出しました。"
 
-    if ask_yes_no "テンプレートの .devcontainer/ で置き換えますか？" "n"; then
+    read -r -p "Replace it with the environment template? [y/N]: " ANSWER
+
+    if [[ "$ANSWER" =~ ^[Yy]$ ]]; then
         rm -rf "$PROJECT_DIR/.devcontainer"
-        cp -R "$DEVCONTAINER_TEMPLATE" "$PROJECT_DIR/.devcontainer"
+        cp -a "$DEVCONTAINER_TEMPLATE" "$PROJECT_DIR/.devcontainer"
+        DEVCONTAINER_CREATED=true
+        ok ".devcontainer replaced"
     else
-        echo "既存の .devcontainer/ をそのまま使用します。"
+        ok "Existing .devcontainer kept"
     fi
 
 else
 
-    cp -R "$DEVCONTAINER_TEMPLATE" "$PROJECT_DIR/.devcontainer"
+    cp -a "$DEVCONTAINER_TEMPLATE" "$PROJECT_DIR/.devcontainer"
+    DEVCONTAINER_CREATED=true
+    ok ".devcontainer created"
 
 fi
 
@@ -188,32 +271,48 @@ fi
 # .gitignore
 # ============================================================
 
-info ".gitignoreを設定します"
+info "Configuring .gitignore"
 
-if [[ ! -f "$PROJECT_DIR/.gitignore" ]]; then
+PROJECT_GITIGNORE="$PROJECT_DIR/.gitignore"
 
-    cp "$GITIGNORE_TEMPLATE" "$PROJECT_DIR/.gitignore"
+if [[ ! -f "$PROJECT_GITIGNORE" ]]; then
+
+    cp "$GITIGNORE_TEMPLATE" "$PROJECT_GITIGNORE"
+    ok ".gitignore created"
 
 else
 
-    echo "既存の .gitignore を検出しました。"
-    echo "LaTeX用テンプレートの内容を追加します。"
-
-    echo >> "$PROJECT_DIR/.gitignore"
-    echo "# --- Local LaTeX environment ---" >> "$PROJECT_DIR/.gitignore"
+    ADDED=false
 
     while IFS= read -r line || [[ -n "$line" ]]; do
 
-        # Empty lines are harmless but do not need duplicate insertion.
-        if [[ -z "$line" ]]; then
+        # Skip empty lines/comments when checking for duplicates.
+        if [[ -z "$line" || "$line" == \#* ]]; then
             continue
         fi
 
-        if ! grep -Fxq "$line" "$PROJECT_DIR/.gitignore"; then
-            echo "$line" >> "$PROJECT_DIR/.gitignore"
+        if ! grep -Fxq "$line" "$PROJECT_GITIGNORE"; then
+
+            if [[ "$ADDED" == false ]]; then
+                {
+                    echo
+                    echo "# Added by LaTeX development environment"
+                } >> "$PROJECT_GITIGNORE"
+
+                ADDED=true
+            fi
+
+            echo "$line" >> "$PROJECT_GITIGNORE"
+
         fi
 
     done < "$GITIGNORE_TEMPLATE"
+
+    if [[ "$ADDED" == true ]]; then
+        ok "Missing LaTeX ignore rules added"
+    else
+        ok "Existing .gitignore already contains required rules"
+    fi
 
 fi
 
@@ -222,145 +321,107 @@ fi
 # latexmkrc
 # ============================================================
 
-echo
+info "Checking latexmk configuration"
 
-HAS_LATEXMKRC=false
+if [[ -f "$PROJECT_DIR/latexmkrc" && -f "$PROJECT_DIR/.latexmkrc" ]]; then
 
-if [[ -f "$PROJECT_DIR/latexmkrc" ]]; then
-    HAS_LATEXMKRC=true
-fi
+    warn "Both latexmkrc and .latexmkrc exist."
+    echo "      Existing configuration will be preserved."
 
-if [[ -f "$PROJECT_DIR/.latexmkrc" ]]; then
-    HAS_LATEXMKRC=true
-fi
+elif [[ -f "$PROJECT_DIR/latexmkrc" ]]; then
 
-if [[ "$HAS_LATEXMKRC" == true ]]; then
+    ok "Existing latexmkrc kept"
 
-    echo "既存の latexmkrc を検出しました。"
+elif [[ -f "$PROJECT_DIR/.latexmkrc" ]]; then
 
-    if [[ -f "$PROJECT_DIR/latexmkrc" ]]; then
-        echo "  - latexmkrc"
-    fi
-
-    if [[ -f "$PROJECT_DIR/.latexmkrc" ]]; then
-        echo "  - .latexmkrc"
-    fi
-
-    if [[ -f "$PROJECT_DIR/latexmkrc" \
-       && -f "$PROJECT_DIR/.latexmkrc" ]]; then
-
-        echo
-        echo "WARNING:"
-        echo "  latexmkrc と .latexmkrc の両方が存在します。"
-        echo "  設定競合の可能性があるため確認してください。"
-
-    fi
-
-    echo
-    echo "既存のlatexmk設定は変更しません。"
+    ok "Existing .latexmkrc kept"
 
 else
 
-    echo "latexmkrc がないため、LaTeXエンジンを選択してください。"
-    echo
-    echo "  1) pdfLaTeX"
-    echo "  2) LuaLaTeX"
-    echo "  3) upLaTeX"
-    echo "  4) pLaTeX"
-    echo
+    ENGINE="$(
+        printf '%s\n' \
+            "pdfLaTeX" \
+            "LuaLaTeX" \
+            "upLaTeX" \
+            "pLaTeX" \
+        | fzf \
+            --prompt="LaTeX engine > " \
+            --height=45% \
+            --layout=reverse \
+            --border \
+            --info=hidden
+    )"
 
-    while true; do
+    if [[ -z "${ENGINE:-}" ]]; then
+        warn "No LaTeX engine selected."
+    else
 
-        read -r -p "選択 [1-4]: " engine_choice
-
-        case "$engine_choice" in
-            1)
-                ENGINE="pdflatex"
-                break
+        case "$ENGINE" in
+            "pdfLaTeX")
+                TEMPLATE="pdflatex"
                 ;;
-            2)
-                ENGINE="lualatex"
-                break
+            "LuaLaTeX")
+                TEMPLATE="lualatex"
                 ;;
-            3)
-                ENGINE="uplatex"
-                break
+            "upLaTeX")
+                TEMPLATE="uplatex"
                 ;;
-            4)
-                ENGINE="platex"
-                break
-                ;;
-            *)
-                echo "1〜4を入力してください。"
+            "pLaTeX")
+                TEMPLATE="platex"
                 ;;
         esac
 
-    done
+        cp "$LATEXMKRC_DIR/$TEMPLATE" "$PROJECT_DIR/latexmkrc"
 
-    cp "$LATEXMKRC_DIR/$ENGINE" "$PROJECT_DIR/latexmkrc"
-
-    echo
-    echo "latexmkrcを作成しました:"
-    echo "  $ENGINE"
-
-fi
-
-
-# ============================================================
-# TeX Live Docker image pinning
-# ============================================================
-
-echo
-
-DEVCONTAINER_JSON="$PROJECT_DIR/.devcontainer/devcontainer.json"
-
-if [[ ! -f "$DEVCONTAINER_JSON" ]]; then
-    die "devcontainer.json がありません: $DEVCONTAINER_JSON"
-fi
-
-if ask_yes_no "TeX Live Docker imageを現在のdigestに固定しますか？" "y"; then
-
-    info "texlive/texlive:latest を取得します"
-
-    docker pull texlive/texlive:latest
-
-    IMAGE_REF=$(
-        docker image inspect texlive/texlive:latest \
-            --format '{{index .RepoDigests 0}}'
-    )
-
-    [[ -n "$IMAGE_REF" ]] \
-        || die "Docker image digestを取得できませんでした。"
-
-    echo
-    echo "固定するDocker image:"
-    echo "  $IMAGE_REF"
-
-    # Replace:
-    #   texlive/texlive:latest
-    #   texlive/texlive:<tag>
-    #   texlive/texlive@sha256:<digest>
-    #
-    # with the currently pulled digest.
-
-    sed -i -E \
-        "s#\"image\"[[:space:]]*:[[:space:]]*\"texlive/texlive(:[^\"]+|@sha256:[^\"]+)\"#\"image\": \"$IMAGE_REF\"#" \
-        "$DEVCONTAINER_JSON"
-
-    if ! grep -Fq "$IMAGE_REF" "$DEVCONTAINER_JSON"; then
-
-        echo
-        echo "現在の devcontainer.json:"
-        grep '"image"' "$DEVCONTAINER_JSON" || true
-
-        die "devcontainer.json のDocker image書き換えに失敗しました。"
+        ok "latexmkrc created: $ENGINE"
 
     fi
 
-else
+fi
+
+
+# ============================================================
+# Pin TeX Live Docker image
+# ============================================================
+
+DEVCONTAINER_JSON="$PROJECT_DIR/.devcontainer/devcontainer.json"
+
+if [[ -f "$DEVCONTAINER_JSON" ]] \
+    && grep -q '"image"[[:space:]]*:[[:space:]]*"texlive/texlive' \
+        "$DEVCONTAINER_JSON"; then
 
     echo
-    echo "Docker imageはテンプレートの設定をそのまま使用します。"
+    read -r -p \
+        "Pin texlive/texlive Docker image to the current digest? [Y/n]: " \
+        ANSWER
+
+    ANSWER="${ANSWER:-Y}"
+
+    if [[ "$ANSWER" =~ ^[Yy]$ ]]; then
+
+        info "Pulling TeX Live Docker image"
+
+        docker pull texlive/texlive:latest
+
+        IMAGE_REF="$(
+            docker image inspect texlive/texlive:latest \
+                --format '{{index .RepoDigests 0}}'
+        )"
+
+        if [[ -z "$IMAGE_REF" || "$IMAGE_REF" != *@sha256:* ]]; then
+            warn "Could not determine Docker image digest."
+        else
+
+            sed -i -E \
+                "s#\"image\"[[:space:]]*:[[:space:]]*\"texlive/texlive(:[^\"]+|@sha256:[^\"]+)\"#\"image\": \"$IMAGE_REF\"#" \
+                "$DEVCONTAINER_JSON"
+
+            ok "Pinned:"
+            echo "      $IMAGE_REF"
+
+        fi
+
+    fi
 
 fi
 
@@ -370,51 +431,31 @@ fi
 # ============================================================
 
 echo
-echo "=========================================="
-echo " Setup completed"
-echo "=========================================="
+echo "============================================================"
+echo " LaTeX project ready"
+echo "============================================================"
 echo
-
 echo "Project:"
 echo "  $PROJECT_DIR"
 echo
 
-echo "Dev Container:"
-echo "  $PROJECT_DIR/.devcontainer/devcontainer.json"
-echo "  (Git管理対象)"
-echo
-
-echo "Docker image:"
-grep '"image"' "$DEVCONTAINER_JSON" \
-    | sed 's/^[[:space:]]*/  /'
-echo
-
-if [[ -f "$PROJECT_DIR/latexmkrc" ]]; then
-
-    echo "latexmkrc:"
-    echo "  $PROJECT_DIR/latexmkrc"
-    echo
-
-elif [[ -f "$PROJECT_DIR/.latexmkrc" ]]; then
-
-    echo "latexmkrc:"
-    echo "  $PROJECT_DIR/.latexmkrc"
-    echo
-
-fi
-
-echo "Git status:"
-git status --short --branch || true
+case "$SOURCE_TYPE" in
+    "Clone from Overleaf")
+        echo "Canonical Git remote:"
+        echo "  Overleaf"
+        ;;
+    "Clone from Git repository")
+        echo "Canonical Git remote:"
+        echo "  $(git -C "$PROJECT_DIR" remote get-url origin 2>/dev/null || echo unknown)"
+        ;;
+    "Create local project")
+        echo "Canonical Git remote:"
+        echo "  none"
+        ;;
+esac
 
 echo
-echo "次の操作:"
-echo
-echo "  1. VS Codeでプロジェクトを開く"
-echo "  2. Dev Containers: Reopen in Container"
-echo "  3. LaTeX Workshop または"
-echo "     latexmk -outdir=build <main.tex>"
-echo "     でコンパイル"
-echo "  4. 動作確認後、必要なファイルをcommit/push"
+echo "No commit or push was performed automatically."
 echo
 
 
@@ -424,17 +465,27 @@ echo
 
 if command -v code >/dev/null 2>&1; then
 
-    if ask_yes_no "VS Codeでこのプロジェクトを開きますか？" "y"; then
+    read -r -p "Open this project in VS Code? [Y/n]: " ANSWER
+    ANSWER="${ANSWER:-Y}"
 
-        info "VS Codeを起動します"
+    if [[ "$ANSWER" =~ ^[Yy]$ ]]; then
 
         code "$PROJECT_DIR"
+
+        echo
+        echo "VS Codeで:"
+        echo "  Ctrl + Shift + P"
+        echo "  -> Dev Containers: Reopen in Container"
+        echo
 
     fi
 
 else
 
-    echo "VS Codeの 'code' コマンドが見つからないため、"
-    echo "自動起動をスキップします。"
+    warn "'code' command is not available."
+    echo "      Open manually:"
+    echo
+    echo "        cd \"$PROJECT_DIR\""
+    echo "        code ."
 
 fi
