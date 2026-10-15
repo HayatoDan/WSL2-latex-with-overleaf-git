@@ -105,7 +105,7 @@ VS Code および WSL 自体のインストールは、この repository のセ�
 
 ```bash
 cd ~/docker_work
-git clone <repository-url> latex
+git clone https://github.com/HayatoDan/WSL2-latex-with-overleaf-git latex
 cd latex
 ```
 
@@ -685,7 +685,7 @@ cd ~/docker_work
 environment repository を clone：
 
 ```bash
-git clone <repository-url> latex
+git clone https://github.com/HayatoDan/WSL2-latex-with-overleaf-git latex
 cd latex
 ```
 
