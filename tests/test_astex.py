@@ -135,6 +135,99 @@ esac''')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse(project.exists())
 
+    def prepare_select(self, scenario):
+        project = self.project()
+        self.env["ASTEX_GIT_SCENARIO"] = scenario
+        self.env["ASTEX_GIT_LOG"] = str(self.root / "git.log")
+        self.env["ASTEX_OPEN_LOG"] = str(self.root / "opened")
+        self.script(self.mocks / "fzf", "cat")
+        self.script(self.mocks / "code", 'printf "%s\\n" "$@" > "$ASTEX_OPEN_LOG"')
+        self.script(self.mocks / "git", '''
+echo "$*" >> "$ASTEX_GIT_LOG"
+case "$*" in
+    'status --porcelain')
+        case "$ASTEX_GIT_SCENARIO" in
+            status-failed) echo 'fatal: cannot read Git status' >&2; exit 128 ;;
+            dirty) echo ' M main.tex' ;;
+        esac ;;
+    'status --short') echo ' M main.tex' ;;
+    'remote get-url origin')
+        case "$ASTEX_GIT_SCENARIO" in
+            no-remote) exit 2 ;;
+            auth-*) echo 'https://github.com/example/paper.git' ;;
+            *) echo 'https://example.com/paper.git' ;;
+        esac ;;
+    'pull --rebase')
+        case "$ASTEX_GIT_SCENARIO" in
+            pull-failed|auth-*) echo 'fatal: pull failed' >&2; exit 1 ;;
+        esac ;;
+    *) echo 'Unexpected Git operation' >&2; exit 99 ;;
+esac''')
+        self.script(self.mocks / "gh", '''
+case "$*" in
+    'auth status '*) exit 1 ;;
+    'auth login '*) exit 1 ;;
+    *) exit 99 ;;
+esac''')
+        return project
+
+    def test_open_after_pull_failure(self):
+        project = self.prepare_select("pull-failed")
+        result = self.run_cli("list", answer="y\n")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("git pull --rebase failed.", result.stdout)
+        self.assertEqual((self.root / "opened").read_text().strip(), str(project))
+        self.assertEqual((project / "main.tex").read_text(), "local changes")
+
+    def test_cancel_after_pull_failure(self):
+        self.prepare_select("pull-failed")
+        for answer in ["n\n", "\n", ""]:
+            with self.subTest(answer=answer):
+                result = self.run_cli("list", answer=answer)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("Cancelled.", result.stdout)
+                self.assertFalse((self.root / "opened").exists())
+
+    def test_open_after_status_failure(self):
+        self.prepare_select("status-failed")
+        result = self.run_cli("list", answer="y\n")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue((self.root / "opened").exists())
+        self.assertNotIn("pull --rebase", (self.root / "git.log").read_text())
+
+    def test_open_after_auth_failure_or_skip(self):
+        self.prepare_select("auth-failed")
+        for answer, should_pull in [("y\nn\ny\n", False),
+                                    ("n\nn\ny\n", False),
+                                    ("n\ny\ny\n", True)]:
+            with self.subTest(answer=answer):
+                (self.root / "git.log").unlink(missing_ok=True)
+                (self.root / "opened").unlink(missing_ok=True)
+                result = self.run_cli("list", answer=answer)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertTrue((self.root / "opened").exists())
+                self.assertEqual(
+                    "pull --rebase" in (self.root / "git.log").read_text(), should_pull,
+                )
+
+    def test_open_with_local_changes(self):
+        project = self.prepare_select("dirty")
+        result = self.run_cli("list", answer="y\n")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue((self.root / "opened").exists())
+        self.assertNotIn("pull --rebase", (self.root / "git.log").read_text())
+        self.assertEqual((project / "main.tex").read_text(), "local changes")
+
+    def test_successful_pull_and_no_remote_open_without_prompt(self):
+        self.prepare_select("success")
+        for scenario in ["success", "no-remote"]:
+            with self.subTest(scenario=scenario):
+                self.env["ASTEX_GIT_SCENARIO"] = scenario
+                (self.root / "opened").unlink(missing_ok=True)
+                result = self.run_cli("list")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertTrue((self.root / "opened").exists())
+
 
 if __name__ == "__main__":
     unittest.main()

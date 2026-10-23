@@ -58,7 +58,9 @@ ensure_github_auth() {
     echo
 
     local answer
-    read -r -p "Authenticate with GitHub now? [Y/n]: " answer
+    if ! read -r -p "Authenticate with GitHub now? [Y/n]: " answer; then
+        return 1
+    fi
     answer="${answer:-Y}"
 
     if [[ ! "$answer" =~ ^[Yy]$ ]]; then
@@ -70,7 +72,10 @@ ensure_github_auth() {
         --git-protocol https \
         --web; then
 
-        gh auth setup-git --hostname github.com
+        if ! gh auth setup-git --hostname github.com; then
+            warn "Git credential helper setup failed."
+            return 1
+        fi
 
         ok "GitHub authentication configured"
         return 0
@@ -144,41 +149,46 @@ cd "$PROJECT_DIR"
 # Git sync
 # ------------------------------------------------------------
 
-if [[ -d ".git" ]]; then
+sync_project() {
+    local status origin_url answer
 
-    if [[ -n "$(git status --porcelain)" ]]; then
+    if [[ ! -e ".git" ]]; then
+        info "Not a Git repository"
+        echo "    pull skipped"
+        return 0
+    fi
+
+    if ! status="$(git status --porcelain)"; then
+        warn "Git の状態を取得できないため、自動 pull をスキップします。"
+        return 1
+    fi
+
+    if [[ -n "$status" ]]; then
 
         warn "Local changesがあります:"
         echo
-        git status --short
+        git status --short || true
         echo
 
-        read -r -p \
-            "git pullせずにVS Codeを開きますか？ [y/N]: " \
-            ANSWER
-
-        if [[ ! "$ANSWER" =~ ^[Yy]$ ]]; then
-            echo "Cancelled."
-            exit 0
-        fi
+        return 1
 
     elif git remote get-url origin >/dev/null 2>&1; then
 
-        ORIGIN_URL="$(git remote get-url origin)"
+        if ! origin_url="$(git remote get-url origin)"; then
+            warn "origin の URL を取得できませんでした。"
+            return 1
+        fi
 
         # GitHub HTTPS repositories use gh as credential helper.
-        if [[ "$ORIGIN_URL" == "$GITHUB_HTTPS_PREFIX"* ]]; then
+        if [[ "$origin_url" == "$GITHUB_HTTPS_PREFIX"* ]]; then
 
             if ! ensure_github_auth; then
 
                 echo
-                read -r -p \
+                if ! read -r -p \
                     "Continue with git pull using existing Git credentials? [y/N]: " \
-                    ANSWER
-
-                if [[ ! "$ANSWER" =~ ^[Yy]$ ]]; then
-                    echo "Cancelled."
-                    exit 0
+                    answer || [[ ! "$answer" =~ ^[Yy]$ ]]; then
+                    return 1
                 fi
 
             fi
@@ -190,8 +200,9 @@ if [[ -d ".git" ]]; then
         if git pull --rebase; then
             ok "Repository updated"
         else
-            error "git pull --rebase failed."
-            exit 1
+            warn "git pull --rebase failed."
+            echo "    競合などで rebase が途中の場合は、VS Code のターミナルで Git の状態を確認してください。"
+            return 1
         fi
 
     else
@@ -201,11 +212,17 @@ if [[ -d ".git" ]]; then
 
     fi
 
-else
+    return 0
+}
 
-    info "Not a Git repository"
-    echo "    pull skipped"
-
+if ! sync_project; then
+    echo
+    if ! read -r -p \
+        "同期せずにローカルのプロジェクトを VS Code で開きますか？ [y/N]: " \
+        ANSWER || [[ ! "$ANSWER" =~ ^[Yy]$ ]]; then
+        echo "Cancelled."
+        exit 0
+    fi
 fi
 
 
