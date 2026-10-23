@@ -64,6 +64,8 @@ error() {
 info "Checking LaTeX environment repository"
 
 REQUIRED_FILES=(
+    "bin/astex"
+    "bin/remove-latex-project.sh"
     "bin/latex-menu.sh"
     "bin/latex-select.sh"
     "bin/new-latex-project.sh"
@@ -130,7 +132,7 @@ else
 
     warn "fzf is not installed."
     echo
-    echo "texmenu / texproj / texnew require fzf."
+    echo "astex の対話メニューには fzf が必要です。"
     echo
 
     read -r -p \
@@ -326,10 +328,14 @@ ok "$PROJECTS_DIR"
 
 info "Preparing scripts"
 
+chmod +x "$BIN_DIR/astex"
+chmod +x "$BIN_DIR/remove-latex-project.sh"
 chmod +x "$BIN_DIR/latex-menu.sh"
 chmod +x "$BIN_DIR/latex-select.sh"
 chmod +x "$BIN_DIR/new-latex-project.sh"
 
+ok "astex"
+ok "remove-latex-project.sh"
 ok "latex-menu.sh"
 ok "latex-select.sh"
 ok "new-latex-project.sh"
@@ -406,19 +412,28 @@ create_symlink() {
 
 
 create_symlink \
-    "$BIN_DIR/latex-menu.sh" \
-    "$USER_BIN/texmenu" \
-    "texmenu"
+    "$BIN_DIR/astex" \
+    "$USER_BIN/astex" \
+    "astex"
 
-create_symlink \
-    "$BIN_DIR/latex-select.sh" \
-    "$USER_BIN/texproj" \
-    "texproj"
-
-create_symlink \
-    "$BIN_DIR/new-latex-project.sh" \
-    "$USER_BIN/texnew" \
-    "texnew"
+# Remove only legacy symlinks installed from this repository.
+# Preserve unrelated commands and links to other repositories.
+if [[ -L "$USER_BIN/astex" ]] \
+    && [[ "$(readlink -f "$USER_BIN/astex" || true)" == "$BIN_DIR/astex" ]]; then
+    for legacy in texmenu texproj texnew; do
+        case "$legacy" in
+            texmenu) script="latex-menu.sh" ;;
+            texproj) script="latex-select.sh" ;;
+            texnew)  script="new-latex-project.sh" ;;
+        esac
+        target="$USER_BIN/$legacy"
+        if [[ -L "$target" ]] \
+            && [[ "$(readlink -f "$target" || true)" == "$BIN_DIR/$script" ]]; then
+            rm -- "$target"
+            ok "Removed legacy command: $legacy"
+        fi
+    done
+fi
 
 
 # ------------------------------------------------------------
@@ -604,7 +619,7 @@ else
     warn "'code' command is not available in WSL."
 
     echo
-    echo "      texproj / texnew use:"
+    echo "      astex list / astex newproj use:"
     echo
     echo "        code <project>"
     echo
@@ -645,7 +660,7 @@ fi
 
 info "Checking LaTeX environment commands"
 
-for command in texmenu texproj texnew; do
+for command in astex; do
 
     if command -v "$command" >/dev/null 2>&1; then
         ok "$command"
@@ -672,9 +687,11 @@ echo "Projects:"
 echo "  $PROJECTS_DIR"
 echo
 echo "Commands:"
-echo "  texmenu    LaTeX project launcher"
-echo "  texproj    Select and open an existing project"
-echo "  texnew     Create or clone a new project"
+echo "  astex menu       LaTeX project launcher"
+echo "  astex list       Select and open an existing project"
+echo "  astex newproj    Create or clone a new project"
+echo "  astex remove     Remove a local project after confirmation"
+echo "  astex --help     Show usage"
 echo
 echo "Reload the shell configuration with:"
 echo
@@ -682,5 +699,5 @@ echo "  source ~/.bashrc"
 echo
 echo "Then:"
 echo
-echo "  texmenu"
+echo "  astex menu"
 echo

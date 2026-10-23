@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]}")"
+SCRIPT_DIR="$(cd -- "$(dirname -- "$SCRIPT_PATH")" && pwd)"
+
+usage() {
+    cat <<'EOF'
+Usage: astex <command> [options]
+
+LaTeX プロジェクトを管理します。
+
+Commands:
+  menu              対話メニューを開く
+  list              既存プロジェクトを一覧から選び、同期して VS Code で開く
+  newproj           プロジェクトを新規作成、または Git から clone する
+  remove [name]     ローカルプロジェクトを確認後に削除する（省略時は一覧から選択）
+
+Options:
+  -h, --help        使い方を表示する
+
+Examples:
+  astex menu
+  astex list
+  astex newproj
+  astex remove
+  astex remove paper-a
+
+remove は projects/ 内のディレクトリを削除します。
+未コミットの変更や未 push のコミットも削除されます。リモートは変更しません。
+EOF
+}
+
+if [[ $# -eq 0 ]]; then
+    usage
+    exit 0
+fi
+
+COMMAND="$1"
+shift
+
+case "$COMMAND" in
+    -h|--help|help)
+        if [[ $# -ne 0 ]]; then
+            echo "ERROR: ヘルプに追加の引数は指定できません。" >&2
+            exit 1
+        fi
+        usage
+        exit 0
+        ;;
+    menu|list|newproj|remove) ;;
+    *)
+        printf 'ERROR: 不明なコマンド: %s\n' "$COMMAND" >&2
+        usage >&2
+        exit 1
+        ;;
+esac
+
+if [[ $# -eq 1 && ( "$1" == "-h" || "$1" == "--help" ) ]]; then
+    usage
+    exit 0
+fi
+
+if [[ "$COMMAND" != "remove" && $# -ne 0 ]] \
+    || [[ "$COMMAND" == "remove" && $# -gt 1 ]]; then
+    echo "ERROR: 引数が正しくありません。astex --help を参照してください。" >&2
+    exit 1
+fi
+
+case "$COMMAND" in
+    menu)    exec "$SCRIPT_DIR/latex-menu.sh" ;;
+    list)    exec "$SCRIPT_DIR/latex-select.sh" ;;
+    newproj) exec "$SCRIPT_DIR/new-latex-project.sh" ;;
+    remove)  exec "$SCRIPT_DIR/remove-latex-project.sh" "$@" ;;
+esac

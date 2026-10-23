@@ -25,7 +25,8 @@ CHOICE="$(
     {
         printf '%s\n' \
             "New project" \
-            "Open existing project"
+            "Open existing project" \
+            "Remove local project"
     } | fzf \
         --prompt="LaTeX > " \
         --height=40% \
@@ -42,11 +43,15 @@ fi
 
 case "$CHOICE" in
     "New project")
-        exec "$SCRIPT_DIR/new-latex-project.sh"
+        exec "$SCRIPT_DIR/astex" newproj
         ;;
 
     "Open existing project")
-        exec "$SCRIPT_DIR/latex-select.sh"
+        exec "$SCRIPT_DIR/astex" list
+        ;;
+
+    "Remove local project")
+        exec "$SCRIPT_DIR/astex" remove
         ;;
 
     *)

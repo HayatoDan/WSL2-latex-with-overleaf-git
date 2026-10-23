@@ -146,9 +146,8 @@ bash setup/install-wsl.sh
 - GitHub へのブラウザ認証
 - `gh` の Git credential helper 設定
 - 各スクリプトへの実行権限設定
-- `~/bin/texmenu` の作成
-- `~/bin/texproj` の作成
-- `~/bin/texnew` の作成
+- `~/bin/astex` の作成
+- この repository が作成した旧コマンドのシンボリックリンクを削除
 - `~/bin` の PATH 設定
 - Git identity の確認
 - Docker の利用可否確認
@@ -167,9 +166,8 @@ source ~/.bashrc
 確認：
 
 ```bash
-which texmenu
-which texproj
-which texnew
+which astex
+astex --help
 ```
 
 ---
@@ -230,6 +228,8 @@ latex/
 ├── README.md
 │
 ├── bin/
+│   ├── astex
+│   ├── remove-latex-project.sh
 │   ├── latex-menu.sh
 │   ├── latex-select.sh
 │   └── new-latex-project.sh
@@ -290,12 +290,38 @@ git check-ignore -v projects/
 
 ---
 
-## 7. Launcher
+## 7. astex コマンド
+
+プロジェクトの操作は `astex` に統合している。
+`menu`、`list`、`newproj`、`remove` は `astex` に続けて指定するサブコマンドである。
+
+### 7.1 コマンド一覧
+
+| コマンド | 動作 |
+| --- | --- |
+| `astex menu` | 対話メニューを開く |
+| `astex list` | 既存プロジェクトを一覧から選び、同期して VS Code で開く |
+| `astex newproj` | 新規作成または Git から clone する |
+| `astex remove` | 一覧から選んだローカルプロジェクトを確認後に削除する |
+| `astex remove paper-a` | ローカルの `paper-a` を確認後に削除する |
+| `astex --help` | 使い方を表示する |
+
+`astex list` は一覧の表示に続いて、選択したプロジェクトを開くところまで行う。
+
+使い方はターミナルから確認できる。
+
+```bash
+astex --help
+```
+
+引数なしの `astex`、および `astex <command> --help` でもヘルプを表示する。
+
+### 7.2 対話メニュー
 
 通常の入口は、
 
 ```bash
-texmenu
+astex menu
 ```
 
 である。
@@ -305,30 +331,57 @@ texmenu
 ```text
 New project
 Open existing project
+Remove local project
 ```
 
 から選択できる。
 
 ```text
-texmenu
+astex menu
    │
    ├── New project
    │       ↓
-   │     texnew
+   │     astex newproj
    │
-   └── Open existing project
+   ├── Open existing project
+   │       ↓
+   │     astex list
+   │
+   └── Remove local project
            ↓
-         texproj
+         astex remove
 ```
 
-`texnew` と `texproj` を直接実行することもできる。
+`astex newproj`、`astex list`、`astex remove` を直接実行することもできる。
+
+### 7.3 旧コマンドからの移行
+
+| 旧コマンド | 新コマンド |
+| --- | --- |
+| `texmenu` | `astex menu` |
+| `texproj` | `astex list` |
+| `texnew` | `astex newproj` |
+
+既存環境では、この repository のルートでセットアップを再実行する。
+
+```bash
+./setup/install-wsl.sh
+source ~/.bashrc
+hash -r
+astex --help
+```
+
+Windows ショートカットも `astex menu` に変更する。
+セットアップは `~/bin/astex` のリンクを設定した後、この repository のスクリプトを指す旧コマンドの
+シンボリックリンクだけを削除する。
+別のファイルや別の repository を指す旧コマンドは保持する。
 
 ---
 
 ## 8. 新しいプロジェクト
 
 ```bash
-texnew
+astex newproj
 ```
 
 を実行すると、
@@ -400,7 +453,7 @@ origin = none
 ## 9. 既存プロジェクト
 
 ```bash
-texproj
+astex list
 ```
 
 を実行する。
@@ -408,7 +461,7 @@ texproj
 `fzf` で `projects/` 以下のプロジェクトを検索・選択する。
 
 ```text
-texproj
+astex list
    ↓
 project 選択
    ↓
@@ -417,7 +470,7 @@ git pull --rebase
 VS Code
 ```
 
-`texproj` は通常、remote の種類を意識しない。
+`astex list` は通常、remote の種類を意識しない。
 
 例えば、
 
@@ -447,6 +500,27 @@ Ctrl + Shift + P
 ```
 
 を実行する。
+
+### 9.1 ローカルプロジェクトの削除
+
+```bash
+astex remove
+```
+
+`projects/` 直下のディレクトリを一覧から選び、確認に `y` と答えると削除する。
+名前を指定して削除することもできる。
+
+```bash
+astex remove paper-a
+```
+
+削除はローカルのプロジェクトディレクトリ全体（`.git` を含む）を削除することで行う。
+未コミットの変更や未 push のコミットも失われるため、必要なものは事前に保存・push しておく。
+空入力、`n`、入力の終了では削除を中止する。
+`projects/` 外のパスやシンボリックリンクは指定できない。
+
+GitHub・Overleaf のリモートプロジェクト、および Docker のコンテナ・イメージ・ボリュームは削除しない。
+ローカルだけで作成したプロジェクトも、clone したプロジェクトも削除対象となる。
 
 ---
 
@@ -570,7 +644,7 @@ Windows のショートカットから直接 launcher を起動できる。
 ショートカットのリンク先：
 
 ```text
-C:\Windows\System32\wsl.exe -d Ubuntu-22.04 -- bash -ic "texmenu; exec bash"
+C:\Windows\System32\wsl.exe -d Ubuntu-22.04 -- bash -ic "astex menu; exec bash"
 ```
 
 Ubuntu の distribution 名は、
@@ -588,11 +662,12 @@ Windows shortcut
       ↓
 WSL Ubuntu
       ↓
-   texmenu
+   astex menu
       ↓
 ┌───────────────────────┐
 │ New project           │
 │ Open existing project │
+│ Remove local project  │
 └───────────────────────┘
 ```
 
@@ -703,9 +778,7 @@ fzf
 GitHub CLI
 GitHub authentication
 Git credential helper
-texmenu
-texproj
-texnew
+astex
 ```
 
 まで設定される。
@@ -713,10 +786,10 @@ texnew
 確認：
 
 ```bash
-texmenu
+astex menu
 ```
 
-必要な LaTeX project は `texnew` から再度 clone する。
+必要な LaTeX project は `astex newproj` から再度 clone する。
 
 ---
 
@@ -725,17 +798,14 @@ texmenu
 ### Commands
 
 ```bash
-which texmenu
-which texproj
-which texnew
+which astex
+astex --help
 ```
 
 ### Symlinks
 
 ```bash
-readlink -f ~/bin/texmenu
-readlink -f ~/bin/texproj
-readlink -f ~/bin/texnew
+readlink -f ~/bin/astex
 ```
 
 ### GitHub
@@ -774,7 +844,7 @@ git check-ignore -v projects/
 
 ## 18. Troubleshooting
 
-### `texmenu`, `texproj`, `texnew`: command not found
+### `astex`: command not found
 
 ```bash
 source ~/.bashrc
@@ -783,9 +853,8 @@ source ~/.bashrc
 確認：
 
 ```bash
-which texmenu
-which texproj
-which texnew
+which astex
+astex --help
 ```
 
 ### GitHub private repository を clone できない
